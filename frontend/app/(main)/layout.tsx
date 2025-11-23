@@ -8,7 +8,9 @@ export default function MainLayout({
   return (
     <>
       <Navbar />
-      <main>{children}</main>
+      <main className="flex flex-col gap-16 px-4 sm:px-6 lg:px-8 py-8">
+        {children}
+      </main>
     </>
   )
 }
