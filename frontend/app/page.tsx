@@ -1,17 +1,21 @@
+import { Navbar } from '@/components/layout/navbar'
+
 export default function HomePage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">
-          Hossain Pharmaceuticals
-        </h1>
-        <p className="text-xl text-muted-foreground mb-8">
-          Multi-Vendor Medicine E-Commerce Platform
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Frontend setup complete. Ready for development! 🚀
-        </p>
+    <>
+      <Navbar />
+      <div className="min-h-screen">
+        <section className="container py-20">
+          <div className="text-center space-y-4">
+            <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
+              Welcome to Hossain Pharmaceuticals
+            </h1>
+            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+              Your trusted platform for purchasing quality medicines from verified sellers
+            </p>
+          </div>
+        </section>
       </div>
-    </main>
+    </>
   )
 }
