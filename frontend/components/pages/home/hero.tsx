@@ -8,8 +8,7 @@ import { ScaleIn } from '@/components/animations/scale-in'
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden bg-gradient-to-b from-background to-muted/20 py-12 sm:py-16 lg:py-20">
-      <div className="container px-10 ">
+    <section className="relative overflow-hidden bg-gradient-to-b from-background to-muted/20 py-12 sm:py-16 lg:py-20 px-10 w-full">
         <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
           {/* Left */}
           <div className="flex flex-col gap-6 lg:gap-8">
@@ -102,9 +101,9 @@ export function Hero() {
               </div>
             </div>
           </FadeIn>
-        </div>
+      </div>
 
-        <StaggerContainer staggerDelay={0.15} initialDelay={0.6} className="mt-20">
+      <StaggerContainer staggerDelay={0.15} initialDelay={0.6} className="mt-20 px-10">
           <div className="grid grid-cols-1 gap-8 sm:grid-cols-3">
             <StaggerItem>
               <ScaleIn delay={0} duration={0.5}>
@@ -148,8 +147,7 @@ export function Hero() {
               </ScaleIn>
             </StaggerItem>
           </div>
-        </StaggerContainer>
-      </div>
+      </StaggerContainer>
 
       {/* Background */}
       <div className="absolute inset-0 -z-10 overflow-hidden">
