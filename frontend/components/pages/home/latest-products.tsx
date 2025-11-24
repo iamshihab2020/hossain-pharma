@@ -127,8 +127,9 @@ export function LatestProducts() {
           className="w-full "
         >
           <CarouselContent className="-ml-4 md:-ml-2 lg:-ml-3">
-            {products.map((product) => (
+            {products.map((product, index) => (
               <CarouselItem key={product._id} className="pl-4 md:pl-2 lg:pl-3 basis-[65%] sm:basis-[65%] md:basis-1/2 lg:basis-1/3 xl:basis-1/5">
+                <FadeIn direction="up" delay={index * 0.1} duration={0.5}>
                 <Card className="group hover:shadow-xl transition-all duration-300 overflow-hidden h-full max-w-xs">
                   <CardContent className="p-0">
                     {/* Product Image Placeholder */}
@@ -171,12 +172,14 @@ export function LatestProducts() {
                     </Button>
                   </CardFooter>
                 </Card>
+                </FadeIn>
               </CarouselItem>
             ))}
 
             {/* See More Card */}
             {!showAll && (
               <CarouselItem className="pl-4 md:pl-2 lg:pl-3 basis-[65%] sm:basis-[65%] md:basis-1/2 lg:basis-1/3 xl:basis-1/5">
+                <FadeIn direction="up" delay={products.length * 0.1} duration={0.5}>
                 <Card
                   className="group hover:shadow-xl transition-all duration-300 overflow-hidden h-full max-w-xs cursor-pointer border-2 border-dashed border-primary/50 hover:border-primary bg-primary/5 hover:bg-primary/10"
                   onClick={() => setShowAll(true)}
@@ -197,12 +200,14 @@ export function LatestProducts() {
                     </div>
                   </CardContent>
                 </Card>
+                </FadeIn>
               </CarouselItem>
             )}
 
             {/* Collapse Card */}
             {showAll && (
               <CarouselItem className="pl-4 md:pl-2 lg:pl-3 basis-[65%] sm:basis-[65%] md:basis-1/2 lg:basis-1/3 xl:basis-1/5">
+                <FadeIn direction="up" delay={products.length * 0.1} duration={0.5}>
                 <Card
                   className="group hover:shadow-xl transition-all duration-300 overflow-hidden h-full max-w-xs cursor-pointer border-2 border-dashed border-primary/50 hover:border-primary bg-primary/5 hover:bg-primary/10"
                   onClick={() => setShowAll(false)}
@@ -223,6 +228,7 @@ export function LatestProducts() {
                     </div>
                   </CardContent>
                 </Card>
+                </FadeIn>
               </CarouselItem>
             )}
           </CarouselContent>
