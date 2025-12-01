@@ -42,6 +42,38 @@ const config: Config = {
   			card: {
   				DEFAULT: 'hsl(var(--card))',
   				foreground: 'hsl(var(--card-foreground))'
+  			},
+  			// Healthcare-specific colors
+  			trust: {
+  				DEFAULT: 'hsl(210 100% 50%)',
+  				light: 'hsl(210 100% 60%)',
+  				dark: 'hsl(210 100% 40%)',
+  				foreground: 'hsl(0 0% 100%)'
+  			},
+  			health: {
+  				DEFAULT: 'hsl(158 64% 52%)',
+  				light: 'hsl(158 64% 62%)',
+  				dark: 'hsl(158 64% 42%)',
+  				foreground: 'hsl(0 0% 100%)'
+  			},
+  			success: {
+  				DEFAULT: 'hsl(158 64% 52%)',
+  				light: 'hsl(152 69% 94%)',
+  				foreground: 'hsl(0 0% 100%)'
+  			},
+  			warning: {
+  				DEFAULT: 'hsl(38 92% 50%)',
+  				light: 'hsl(48 96% 89%)',
+  				foreground: 'hsl(0 0% 100%)'
+  			},
+  			danger: {
+  				DEFAULT: 'hsl(0 84% 60%)',
+  				light: 'hsl(0 93% 94%)',
+  				foreground: 'hsl(0 0% 100%)'
+  			},
+  			verified: {
+  				DEFAULT: 'hsl(168 76% 42%)',
+  				foreground: 'hsl(0 0% 100%)'
   			}
   		},
   		borderRadius: {
