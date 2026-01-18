@@ -3,7 +3,31 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SessionProvider } from 'next-auth/react'
 import { ThemeProvider } from 'next-themes'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useAuthStore } from '@/lib/stores/auth-store'
+import { useCartStore } from '@/lib/stores/cart-store'
+
+// Component to handle store hydration
+function StoreHydration({ children }: { children: React.ReactNode }) {
+  const { user, isAuthenticated, setLoading } = useAuthStore()
+  const { syncWithServer } = useCartStore()
+  const [isHydrated, setIsHydrated] = useState(false)
+
+  useEffect(() => {
+    // Mark as hydrated after first render
+    setIsHydrated(true)
+    setLoading(false)
+  }, [setLoading])
+
+  useEffect(() => {
+    // Sync cart with server when user logs in
+    if (isHydrated && isAuthenticated && user?.email) {
+      syncWithServer(user.email)
+    }
+  }, [isHydrated, isAuthenticated, user?.email, syncWithServer])
+
+  return <>{children}</>
+}
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -27,7 +51,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <StoreHydration>
+            {children}
+          </StoreHydration>
         </ThemeProvider>
       </QueryClientProvider>
     </SessionProvider>
