@@ -15,54 +15,56 @@ interface VendorCardProps {
 
 export function VendorCard({ vendor, onSelect, compact = false }: VendorCardProps) {
   return (
-    <Card className="p-4 hover:shadow-lg transition-all">
-      <div className="flex items-start gap-4">
+    <Card className="p-4 hover:shadow-lg transition-all h-full flex flex-col">
+      <div className="flex items-start gap-4 flex-grow">
         <Image
           src={vendor.logo}
           alt={`${vendor.name} logo`}
           width={compact ? 48 : 64}
           height={compact ? 48 : 64}
-          className="rounded-lg object-cover"
+          className="rounded-lg object-cover flex-shrink-0"
         />
 
-        <div className="flex-1">
-          <div className="flex items-start justify-between mb-2">
-            <div>
-              <h3 className="font-semibold text-lg flex items-center gap-2">
-                {vendor.name}
-                {vendor.isVerified && (
-                  <Badge variant="outline" className="text-verified border-verified">
-                    <Shield className="w-3 h-3 mr-1" aria-hidden="true" />
-                    Verified
-                  </Badge>
-                )}
-              </h3>
-              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" aria-hidden="true" />
-                <span className="font-medium">{vendor.rating.overall}</span>
-                <span>({vendor.rating.totalReviews} reviews)</span>
-              </div>
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Header */}
+          <div className="mb-2">
+            <h3 className="font-semibold text-lg flex items-center gap-2 flex-wrap">
+              <span className="truncate">{vendor.name}</span>
+              {vendor.isVerified && (
+                <Badge variant="outline" className="text-verified border-verified flex-shrink-0">
+                  <Shield className="w-3 h-3 mr-1" aria-hidden="true" />
+                  Verified
+                </Badge>
+              )}
+            </h3>
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              <Star className="w-4 h-4 fill-yellow-400 text-yellow-400 flex-shrink-0" aria-hidden="true" />
+              <span className="font-medium">{vendor.rating.overall}</span>
+              <span>({vendor.rating.totalReviews} reviews)</span>
             </div>
           </div>
 
+          {/* Description - fixed height */}
           {!compact && (
-            <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+            <p className="text-sm text-muted-foreground mb-3 line-clamp-2 min-h-[2.5rem]">
               {vendor.description}
             </p>
           )}
 
+          {/* Info grid */}
           <div className="grid grid-cols-2 gap-2 text-sm mb-3">
             <div className="flex items-center gap-1 text-muted-foreground">
-              <MapPin className="w-4 h-4" aria-hidden="true" />
-              <span>{vendor.location.distanceFromUser} mi away</span>
+              <MapPin className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+              <span className="truncate">{vendor.location.distanceFromUser} mi away</span>
             </div>
             <div className="flex items-center gap-1 text-muted-foreground">
-              <Clock className="w-4 h-4" aria-hidden="true" />
-              <span>{vendor.deliveryTime}</span>
+              <Clock className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+              <span className="truncate">{vendor.deliveryTime}</span>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 mb-3">
+          {/* Specializations - fixed height */}
+          <div className="flex flex-wrap gap-2 mb-3 min-h-[1.75rem]">
             {vendor.specializations.slice(0, 3).map((spec) => (
               <Badge key={spec} variant="secondary" className="text-xs">
                 {spec}
@@ -70,7 +72,8 @@ export function VendorCard({ vendor, onSelect, compact = false }: VendorCardProp
             ))}
           </div>
 
-          <div className="flex gap-2">
+          {/* Actions */}
+          <div className="flex gap-2 mt-auto">
             <Button variant="outline" size="sm" className="flex-1">
               View Profile
             </Button>

@@ -11,8 +11,8 @@ export function Testimonials() {
   const testimonials = getTopTestimonials(6);
 
   return (
-    <section className="py-16" aria-labelledby="testimonials-heading">
-      <div className="container">
+    <section className="py-16 w-full px-4 sm:px-6 lg:px-8" aria-labelledby="testimonials-heading">
+      <div className="max-w-7xl mx-auto">
         <div className="text-center mb-12">
           <h2 id="testimonials-heading" className="text-3xl font-bold mb-2">
             What Our Customers Say
@@ -22,7 +22,7 @@ export function Testimonials() {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
           {testimonials.map((testimonial, index) => (
             <motion.div
               key={testimonial.id}
@@ -30,6 +30,7 @@ export function Testimonials() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: index * 0.1, duration: 0.3 }}
+              className="h-full"
             >
               <Card className="p-6 h-full flex flex-col">
                 <Quote className="w-8 h-8 text-muted-foreground mb-3" aria-hidden="true" />

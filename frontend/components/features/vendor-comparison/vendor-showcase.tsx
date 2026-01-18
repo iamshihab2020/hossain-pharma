@@ -10,8 +10,8 @@ export function VendorShowcase() {
   const featuredVendors = getFeaturedVendors();
 
   return (
-    <section className="py-16" aria-labelledby="featured-vendors-heading">
-      <div className="container">
+    <section className="py-16 w-full px-4 sm:px-6 lg:px-8" aria-labelledby="featured-vendors-heading">
+      <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h2 id="featured-vendors-heading" className="text-3xl font-bold mb-2">
@@ -29,7 +29,7 @@ export function VendorShowcase() {
           </Button>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
           {featuredVendors.slice(0, 3).map((vendor) => (
             <VendorCard key={vendor.id} vendor={vendor} />
           ))}

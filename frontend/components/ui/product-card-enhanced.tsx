@@ -12,11 +12,14 @@ interface ProductCardEnhancedProps {
 }
 
 export function ProductCardEnhanced({ product }: ProductCardEnhancedProps) {
-  const lowestPriceVendor = product.vendorPricing.sort((a, b) => a.price - b.price)[0];
+  // Create a copy and sort with stable ordering (price first, then vendor name)
+  const lowestPriceVendor = [...product.vendorPricing].sort((a, b) =>
+    a.price - b.price || a.vendorName.localeCompare(b.vendorName)
+  )[0];
 
   return (
-    <Card className="group overflow-hidden hover:shadow-xl transition-all">
-      <div className="relative aspect-square overflow-hidden bg-muted">
+    <Card className="group overflow-hidden hover:shadow-xl transition-all h-full flex flex-col">
+      <div className="relative aspect-square overflow-hidden bg-muted flex-shrink-0">
         <Image
           src={product.image}
           alt={product.name}
@@ -36,75 +39,52 @@ export function ProductCardEnhanced({ product }: ProductCardEnhancedProps) {
               {lowestPriceVendor.discount}% OFF
             </Badge>
           )}
-          {product.isGenericAvailable && (
-            <Badge variant="secondary" className="text-xs">
-              Generic Available
-            </Badge>
-          )}
         </div>
 
         {/* Quick Actions */}
         <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Button size="icon" variant="secondary" className="rounded-full" aria-label="Add to wishlist">
+          <Button size="icon" variant="secondary" className="rounded-full h-8 w-8" aria-label="Add to wishlist">
             <Heart className="w-4 h-4" />
           </Button>
-          <Button size="icon" variant="secondary" className="rounded-full" aria-label="Quick view">
+          <Button size="icon" variant="secondary" className="rounded-full h-8 w-8" aria-label="Quick view">
             <Eye className="w-4 h-4" />
           </Button>
         </div>
       </div>
 
-      <div className="p-4">
-        <h3 className="font-semibold mb-1 line-clamp-1">{product.name}</h3>
-        {product.genericName && (
-          <p className="text-xs text-muted-foreground mb-2">{product.genericName}</p>
-        )}
+      <div className="p-4 flex flex-col flex-grow">
+        {/* Product Name - Fixed height */}
+        <h3 className="font-semibold line-clamp-1 h-6">{product.name}</h3>
 
-        {product.dosage && (
-          <p className="text-xs text-muted-foreground mb-2">
-            {product.dosage} • {product.form}
-          </p>
-        )}
+        {/* Dosage - Fixed height */}
+        <p className="text-xs text-muted-foreground h-4 line-clamp-1">
+          {product.dosage ? `${product.dosage} • ${product.form}` : '\u00A0'}
+        </p>
 
-        {/* Vendor Info */}
-        {lowestPriceVendor && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2">
-            <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" aria-hidden="true" />
-            <span>{lowestPriceVendor.vendorName}</span>
-            {lowestPriceVendor.isVerified && (
-              <Badge variant="outline" className="text-xs px-1 py-0">Verified</Badge>
-            )}
-          </div>
-        )}
+        {/* Vendor Info - Fixed height */}
+        <div className="flex items-center gap-1 text-xs text-muted-foreground h-5 mt-2">
+          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400 flex-shrink-0" aria-hidden="true" />
+          <span className="truncate">{lowestPriceVendor?.vendorName || 'Vendor'}</span>
+          {lowestPriceVendor?.isVerified && (
+            <Badge variant="outline" className="text-[10px] px-1 py-0 flex-shrink-0">Verified</Badge>
+          )}
+        </div>
 
-        {/* Stock Status */}
-        {lowestPriceVendor?.inStock ? (
-          <Badge variant="outline" className="text-xs text-success border-success mb-2">
-            In Stock • {lowestPriceVendor.deliveryTime}
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="text-xs text-danger border-danger mb-2">
-            Out of Stock
-          </Badge>
-        )}
+        {/* Spacer to push price and button to bottom */}
+        <div className="flex-grow min-h-2" />
 
         {/* Price */}
-        <div className="flex items-baseline gap-2 mb-3">
+        <div className="flex items-baseline gap-2 mt-2">
           <span className="text-lg font-bold">${lowestPriceVendor?.price.toFixed(2)}</span>
           {lowestPriceVendor?.originalPrice && (
             <span className="text-sm text-muted-foreground line-through">
               ${lowestPriceVendor.originalPrice.toFixed(2)}
             </span>
           )}
-          {product.vendorCount > 1 && (
-            <span className="text-xs text-muted-foreground">
-              from {product.vendorCount} vendors
-            </span>
-          )}
         </div>
 
         {/* Rating */}
-        <div className="flex items-center gap-1 text-sm mb-3">
+        <div className="flex items-center gap-1 text-sm mt-1 mb-3">
           <div className="flex">
             {Array.from({ length: 5 }).map((_, i) => (
               <Star
@@ -123,9 +103,9 @@ export function ProductCardEnhanced({ product }: ProductCardEnhancedProps) {
           </span>
         </div>
 
-        <Button className="w-full" size="sm">
+        <Button className="w-full mt-auto" size="sm">
           <ShoppingCart className="w-4 h-4 mr-2" aria-hidden="true" />
-          {product.vendorCount > 1 ? 'Compare & Add' : 'Add to Cart'}
+          Add to Cart
         </Button>
       </div>
     </Card>

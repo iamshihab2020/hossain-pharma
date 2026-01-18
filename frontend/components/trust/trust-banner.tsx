@@ -29,8 +29,8 @@ const stats = [
 
 export function TrustBanner() {
   return (
-    <section className="py-12 bg-gradient-to-b from-background to-muted/30" aria-label="Platform statistics and trust indicators">
-      <div className="container">
+    <section className="py-12 bg-gradient-to-b w-full px-4 sm:px-6 lg:px-8 from-background to-muted/30" aria-label="Platform statistics and trust indicators">
+      <div className="max-w-7xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}

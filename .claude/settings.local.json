@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(npx shadcn@latest:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

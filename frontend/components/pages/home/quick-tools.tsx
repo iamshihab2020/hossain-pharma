@@ -48,8 +48,8 @@ export function QuickTools() {
 
   return (
     <>
-      <section className="py-12 bg-muted/30" aria-labelledby="quick-tools-heading">
-        <div className="container">
+      <section className="py-12 bg-muted/30 w-full px-4 sm:px-6 lg:px-8" aria-labelledby="quick-tools-heading">
+        <div className="max-w-7xl mx-auto">
           <div className="text-center mb-8">
             <h2 id="quick-tools-heading" className="text-3xl font-bold mb-2">
               Quick Access Tools

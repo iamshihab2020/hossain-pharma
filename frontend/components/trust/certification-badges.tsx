@@ -44,8 +44,8 @@ const badges: CertificationBadge[] = [
 
 export function CertificationBadges() {
   return (
-    <section className="py-8 border-y bg-muted/30" aria-label="Trust and certifications">
-      <div className="container">
+    <section className="py-8 border-y bg-muted/30 w-full px-4 sm:px-6 lg:px-8" aria-label="Trust and certifications">
+      <div className="max-w-7xl mx-auto">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
           {badges.map((badge, index) => (
             <motion.div

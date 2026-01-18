@@ -28,8 +28,8 @@ const steps = [
 
 export function HowItWorks() {
   return (
-    <section className="py-16 bg-gradient-to-b from-background to-muted/30" aria-labelledby="how-it-works-heading">
-      <div className="container">
+    <section className="py-16 w-full px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-background to-muted/30" aria-labelledby="how-it-works-heading">
+      <div className="max-w-7xl mx-auto">
         <div className="text-center mb-12">
           <h2 id="how-it-works-heading" className="text-3xl font-bold mb-2">
             How It Works

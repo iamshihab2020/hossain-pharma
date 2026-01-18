@@ -134,7 +134,7 @@ export const mockVendors: Vendor[] = [
       { name: 'VIPPS Accredited', issuer: 'NABP', verified: true },
       { name: 'Organic Certified', issuer: 'USDA', verified: true },
       { name: 'GMP Certified', issuer: 'NSF', verified: true },
-    },
+    ],
     isVerified: true,
     isFeatured: true,
     yearsInBusiness: 18,

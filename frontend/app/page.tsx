@@ -18,25 +18,17 @@ export default function HomePage() {
     <>
       <SkipLink />
       <Navbar />
-      <main id="main-content" className="flex flex-col">
+      <main id="main-content" className="flex flex-col items-center gap-0">
         <Hero />
         <CertificationBadges />
-        <div className="container mx-auto">
-          <QuickTools />
-        </div>
+        <QuickTools />
         <TrustBanner />
-        <div className="container mx-auto">
-          <Categories />
-        </div>
+        <Categories />
         <HowItWorks />
-        <div className="container mx-auto">
-          <VendorShowcase />
-        </div>
+        <VendorShowcase />
         <LatestProductsEnhanced />
         <DiscountedProductsEnhanced />
-        <div className="container mx-auto">
-          <FeaturedProducts />
-        </div>
+        <FeaturedProducts />
         <Testimonials />
         <HealthResources />
       </main>

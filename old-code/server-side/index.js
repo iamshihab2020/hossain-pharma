@@ -11,7 +11,8 @@ app.use(cors());
 app.use(express.json());
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const uri = `mongodb+srv://${process.env.DB_NAME}:${process.env.DB_PASS}@cluster2024.kjdp6b2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster2024`;
+const uri = process.env.MONGODB_URI || `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@${process.env.DB_CLUSTER}/?retryWrites=true&w=majority`;
+const dbName = process.env.DB_NAME || "hossain_Pharma";
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -26,29 +27,16 @@ async function run() {
   try {
     // await client.connect();
 
-    const productsCollection = client
-      .db("hossain_Pharma")
-      .collection("products");
+    const db = client.db(dbName);
+    const productsCollection = db.collection("products");
+    const cartCollection = db.collection("cart");
+    const categoryCollection = db.collection("category");
+    const userCollection = db.collection("user");
+    const adsCollection = db.collection("ads");
+    const approvedAdsCollection = db.collection("approvedAds");
+    const paymentCollection = db.collection("payments");
 
-    const cartCollection = client.db("hossain_Pharma").collection("cart");
-
-    const categoryCollection = client
-      .db("hossain_Pharma")
-      .collection("category");
-
-    const userCollection = client.db("hossain_Pharma").collection("user");
-
-    const adsCollection = client.db("hossain_Pharma").collection("ads");
-
-    const approvedAdsCollection = client
-      .db("hossain_Pharma")
-      .collection("approvedAds");
-
-    const paymentCollection = client
-      .db("hossain_Pharma")
-      .collection("payments");
-
-    const invoiceCollection = client.db("hossain_Pharma").collection("invoice");
+    const invoiceCollection = db.collection("invoice");
 
     // jwt related api
     app.post("/jwt", async (req, res) => {

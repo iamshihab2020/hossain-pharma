@@ -3,16 +3,22 @@ import { VendorPricing } from '@/types/vendor';
 import { mockVendors } from './vendors';
 
 // Helper function to generate vendor pricing for a product
+// Uses deterministic values based on index to avoid hydration errors
 const generateVendorPricing = (
   basePrice: number,
   vendorIds: string[],
   hasDiscount: boolean = false
 ): VendorPricing[] => {
+  // Deterministic price variations per vendor index
+  const priceMultipliers = [0.95, 1.02, 0.98, 1.05, 0.92, 1.08];
+  const discountValues = [15, 12, 18, 10, 20, 14];
+  const stockQuantities = [150, 85, 200, 120, 75, 180];
+
   return vendorIds.map((vendorId, index) => {
     const vendor = mockVendors.find((v) => v.id === vendorId)!;
-    const priceVariation = basePrice * (0.9 + Math.random() * 0.2); // ±10% variation
-    const price = Math.round(priceVariation * 100) / 100;
-    const discount = hasDiscount ? Math.floor(Math.random() * 20) + 10 : 0;
+    const multiplier = priceMultipliers[index % priceMultipliers.length];
+    const price = Math.round(basePrice * multiplier * 100) / 100;
+    const discount = hasDiscount ? discountValues[index % discountValues.length] : 0;
     const originalPrice = discount > 0 ? Math.round((price / (1 - discount / 100)) * 100) / 100 : undefined;
 
     return {
@@ -23,8 +29,8 @@ const generateVendorPricing = (
       price,
       originalPrice,
       discount,
-      inStock: Math.random() > 0.1, // 90% in stock
-      stockQuantity: Math.floor(Math.random() * 200) + 50,
+      inStock: index !== 2, // All in stock except index 2
+      stockQuantity: stockQuantities[index % stockQuantities.length],
       deliveryTime: vendor.deliveryTime,
       distance: vendor.location.distanceFromUser || 0,
       isVerified: vendor.isVerified,

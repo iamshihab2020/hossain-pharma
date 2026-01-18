@@ -1,62 +1,91 @@
 'use client'
 
-import { ArrowRight, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Pill,
+  Apple,
+  Cross,
+  Shield,
+  Thermometer,
+  Leaf,
+  Sparkles,
+  Droplet,
+  type LucideIcon
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { FadeIn } from '@/components/animations/fade-in'
-import { StaggerContainer, StaggerItem } from '@/components/animations/stagger-container'
 import Link from 'next/link'
 import { useState } from 'react'
 
+// Category type with icon
+interface Category {
+  id: string;
+  categoryName: string;
+  categoryTag: string;
+  icon: LucideIcon;
+  color: string;
+}
+
 // Temporary mock data - replace with API call later
-const categories = [
+const categories: Category[] = [
   {
     id: '1',
     categoryName: 'Pain Relief',
-    categoryImage: '/categories/pain-relief.png',
     categoryTag: 'pain-relief',
+    icon: Pill,
+    color: 'text-red-500',
   },
   {
     id: '2',
     categoryName: 'Vitamins',
-    categoryImage: '/categories/vitamins.png',
     categoryTag: 'vitamins',
+    icon: Apple,
+    color: 'text-orange-500',
   },
   {
     id: '3',
     categoryName: 'First Aid',
-    categoryImage: '/categories/first-aid.png',
     categoryTag: 'first-aid',
+    icon: Cross,
+    color: 'text-red-600',
   },
   {
     id: '4',
     categoryName: 'Antibiotics',
-    categoryImage: '/categories/antibiotics.png',
     categoryTag: 'antibiotics',
+    icon: Shield,
+    color: 'text-blue-500',
   },
   {
     id: '5',
     categoryName: 'Cold & Flu',
-    categoryImage: '/categories/cold-flu.png',
     categoryTag: 'cold-flu',
+    icon: Thermometer,
+    color: 'text-cyan-500',
   },
   {
     id: '6',
     categoryName: 'Supplements',
-    categoryImage: '/categories/supplements.png',
     categoryTag: 'supplements',
+    icon: Leaf,
+    color: 'text-green-500',
   },
   {
     id: '7',
     categoryName: 'Skincare',
-    categoryImage: '/categories/skincare.png',
     categoryTag: 'skincare',
+    icon: Sparkles,
+    color: 'text-pink-500',
   },
   {
     id: '8',
     categoryName: 'Diabetes Care',
-    categoryImage: '/categories/diabetes.png',
     categoryTag: 'diabetes',
+    icon: Droplet,
+    color: 'text-purple-500',
   },
 ]
 
@@ -65,7 +94,8 @@ export function Categories() {
   const displayedCategories = showAll ? categories : categories.slice(0, 4)
 
   return (
-    <section className="py-16 px-10 w-full">
+    <section className="py-16 w-full px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto">
         <FadeIn direction="up" duration={0.6}>
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold tracking-tight sm:text-4xl mb-4">
@@ -77,20 +107,21 @@ export function Categories() {
           </div>
         </FadeIn>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {displayedCategories.map((category, index) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {displayedCategories.map((category, index) => {
+            const IconComponent = category.icon;
+            return (
               <FadeIn key={category.id} direction="up" delay={index * 0.1} duration={0.5}>
                 <Card className="group hover:shadow-xl transition-all duration-300 border-2 hover:border-primary/50 overflow-hidden">
-                  <CardContent className="p-6 flex flex-col items-center justify-center min-h-[250px]">
-                    {/* Placeholder for category image */}
-                    <div className="w-32 h-32 bg-gradient-to-br from-primary/10 to-primary/5 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
-                      <div className="text-4xl text-primary">💊</div>
+                  <CardContent className="p-6 flex flex-col items-center justify-center min-h-[200px]">
+                    <div className="w-20 h-20 bg-gradient-to-br from-primary/10 to-primary/5 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-300">
+                      <IconComponent className={`w-10 h-10 ${category.color}`} aria-hidden="true" />
                     </div>
-                    <h3 className="text-xl font-semibold text-center">
+                    <h3 className="text-lg font-semibold text-center">
                       {category.categoryName}
                     </h3>
                   </CardContent>
-                  <CardFooter className="pt-0 pb-6 justify-center">
+                  <CardFooter className="pt-0 pb-4 justify-center">
                     <Link href={`/category/${category.categoryTag}`}>
                       <Button
                         variant="ghost"
@@ -104,8 +135,9 @@ export function Categories() {
                   </CardFooter>
                 </Card>
               </FadeIn>
-            ))}
-          </div>
+            );
+          })}
+        </div>
 
         <div className="flex justify-center mt-8">
           <Button
@@ -126,6 +158,7 @@ export function Categories() {
             )}
           </Button>
         </div>
+      </div>
     </section>
   )
 }

@@ -8,8 +8,8 @@ import { ScaleIn } from '@/components/animations/scale-in'
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden bg-gradient-to-b from-background to-muted/20 py-12 sm:py-16 lg:py-20 px-10 w-full">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+    <section className="flex items-center flex-col relative overflow-hidden bg-gradient-to-b from-background to-muted/20 py-12 sm:py-16 lg:py-20 px-10 w-full">
+        <div className="max-w-7xl w-full grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-20 items-center">
           {/* Left */}
           <div className="flex flex-col gap-6 lg:gap-8">
             <FadeIn direction="up" duration={0.6}>
