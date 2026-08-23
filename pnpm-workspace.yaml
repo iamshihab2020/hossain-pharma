@@ -2,3 +2,14 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'scripts/*'
+
+# pnpm 11 blocks dependency build scripts unless listed here.
+# esbuild and protobufjs need theirs: esbuild fetches its platform binary on
+# install and both tsx and vitest are dead without it. cpu-features and ssh2
+# are optional native accelerations under testcontainers with working pure-JS
+# fallbacks, so they stay off.
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+  cpu-features: false
+  ssh2: false
