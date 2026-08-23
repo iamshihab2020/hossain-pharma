@@ -1,0 +1,29 @@
+{
+  "name": "hossain-commerce",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check",
+    "test": "turbo run test",
+    "db:generate": "pnpm --filter @hossain/db run generate",
+    "db:push": "pnpm --filter @hossain/db run migrate",
+    "db:migrate": "pnpm --filter @hossain/db run migrate",
+    "seed": "pnpm --filter @hossain/db run seed",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "prettier": "^3.9.6",
+    "turbo": "^2.10.11",
+    "typescript": "^5.9.3"
+  }
+}
