@@ -1,6 +1,7 @@
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { loadDbEnv } from './env.js';
+import { makeWithTenant } from './tenant-context.js';
 import * as schema from './schema/index.js';
 
 const env = loadDbEnv();
@@ -24,6 +25,13 @@ export const pool = new Pool({
 });
 
 export const db: NodePgDatabase<typeof schema> = drizzle(pool, { schema });
+
+/**
+ * The production tenant-scoped transaction wrapper. This is the handle the rest
+ * of the application uses; the raw `db` and `pool` above are banned outside this
+ * package by a lint rule (PRD 6.4 criterion 2).
+ */
+export const withTenant = makeWithTenant(db);
 
 export async function closeDb(): Promise<void> {
   await pool.end();

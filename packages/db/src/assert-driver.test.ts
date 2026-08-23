@@ -44,7 +44,20 @@ describe('assertInteractiveTransactions', () => {
     } as unknown as Pool;
 
     await expect(assertInteractiveTransactions(brokenPool)).rejects.toThrow(
-      /Driver capability probe failed/,
+      /Driver capability probe failed: ECONNREFUSED/,
+    );
+  });
+
+  it('wraps a non-Error rejection too, so the boot message is never [object Object]', async () => {
+    // Drivers do occasionally reject with a bare string or object. Without the
+    // String() fallback the failure message would be useless at 3am.
+    const oddPool = {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      connect: () => Promise.reject('socket hang up'),
+    } as unknown as Pool;
+
+    await expect(assertInteractiveTransactions(oddPool)).rejects.toThrow(
+      /Driver capability probe failed: socket hang up/,
     );
   });
 });

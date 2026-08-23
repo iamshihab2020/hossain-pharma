@@ -15,7 +15,7 @@
     "build": "tsc -b tsconfig.build.json",
     "type-check": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "generate": "drizzle-kit generate",
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed/index.ts"
