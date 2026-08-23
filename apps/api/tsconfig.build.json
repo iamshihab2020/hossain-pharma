@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // rootDir is src, not ".", so the emit is dist/main.js rather than
+    // dist/src/main.js. The `start` script depends on this.
+    "rootDir": "src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["test/**/*", "dist", "node_modules"]
+}

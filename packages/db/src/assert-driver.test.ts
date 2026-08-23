@@ -49,8 +49,6 @@ describe('assertInteractiveTransactions', () => {
   });
 
   it('wraps a non-Error rejection too, so the boot message is never [object Object]', async () => {
-    // Drivers do occasionally reject with a bare string or object. Without the
-    // String() fallback the failure message would be useless at 3am.
     const oddPool = {
       // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
       connect: () => Promise.reject('socket hang up'),
@@ -59,5 +57,50 @@ describe('assertInteractiveTransactions', () => {
     await expect(assertInteractiveTransactions(oddPool)).rejects.toThrow(
       /Driver capability probe failed: socket hang up/,
     );
+  });
+
+  it('surfaces an error code when the driver gives no message', async () => {
+    const codeOnly = Object.assign(new Error(''), { code: 'ECONNREFUSED' });
+    const pool = { connect: () => Promise.reject(codeOnly) } as unknown as Pool;
+
+    await expect(assertInteractiveTransactions(pool)).rejects.toThrow(/ECONNREFUSED/);
+  });
+
+  it('unwraps an AggregateError, which is what a refused multi-address host raises', async () => {
+    // node-postgres raises AggregateError with an EMPTY message when every
+    // address for a host refuses. Naively reading .message renders
+    // "probe failed: " and tells an on-call engineer nothing.
+    const aggregate = new AggregateError(
+      [Object.assign(new Error(''), { code: 'ECONNREFUSED' })],
+      '',
+    );
+    const pool = { connect: () => Promise.reject(aggregate) } as unknown as Pool;
+
+    const error = await assertInteractiveTransactions(pool).then(
+      () => {
+        throw new Error('expected a rejection');
+      },
+      (e: unknown) => e as Error,
+    );
+
+    expect(error.message).toMatch(/AggregateError/);
+    expect(error.message).toMatch(/ECONNREFUSED/);
+    expect(error.message).not.toMatch(/probe failed:\s*$/);
+  });
+
+  it('stringifies a rejection that is neither a string nor an Error', async () => {
+    const pool = { connect: () => Promise.reject({ nope: true }) } as unknown as Pool;
+
+    await expect(assertInteractiveTransactions(pool)).rejects.toThrow(
+      /Driver capability probe failed: \[object Object\]/,
+    );
+  });
+
+  it('falls back to the error name when there is nothing else at all', async () => {
+    const bare = new Error('');
+    bare.name = 'MysteriousFailure';
+    const pool = { connect: () => Promise.reject(bare) } as unknown as Pool;
+
+    await expect(assertInteractiveTransactions(pool)).rejects.toThrow(/MysteriousFailure/);
   });
 });

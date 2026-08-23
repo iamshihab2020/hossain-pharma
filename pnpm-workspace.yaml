@@ -13,3 +13,5 @@ allowBuilds:
   protobufjs: true
   cpu-features: false
   ssh2: false
+  # NestJS analytics phone-home. No functional role.
+  '@scarf/scarf': false

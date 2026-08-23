@@ -46,10 +46,33 @@ export async function assertInteractiveTransactions(pool: Pool): Promise<void> {
     }
   } catch (error) {
     if (error instanceof DriverCapabilityError) throw error;
-    throw new DriverCapabilityError(
-      `Driver capability probe failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    throw new DriverCapabilityError(`Driver capability probe failed: ${describe(error)}`);
   } finally {
     client?.release();
   }
+}
+
+/**
+ * Drivers do not always give you a useful `message`. node-postgres raises an
+ * AggregateError with an empty message when every address for a host refuses
+ * the connection, which renders as "probe failed: " and tells an on-call
+ * engineer nothing. Fall back through code, name, and nested causes.
+ */
+function describe(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (!(error instanceof Error)) return String(error);
+
+  const parts: string[] = [];
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string' && code.length > 0) parts.push(code);
+  if (error.message.length > 0) parts.push(error.message);
+
+  if (parts.length === 0) {
+    const nested = error instanceof AggregateError ? error.errors : [];
+    const inner = nested.map((e: unknown) => describe(e)).filter((s) => s.length > 0);
+    if (inner.length > 0) return `${error.name}: ${inner.join('; ')}`;
+    return error.name;
+  }
+
+  return parts.join(' ');
 }
