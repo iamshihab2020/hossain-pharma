@@ -1,0 +1,47 @@
+# Host ports are deliberately NON-standard: 5433 and 6380.
+#
+# Other projects on this machine already bind the defaults (GrowthOS runs
+# postgres on 5432 and redis on 6379). Claiming those would either fail to
+# bind or, worse, point this project's migrations at another project's
+# database. Container-internal ports stay standard, so nothing inside the
+# compose network changes.
+#
+# Testcontainers (packages/db test suites) allocates its own random host
+# port per run and is unaffected by any of this.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hossain-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hossain
+    ports:
+      - '5433:5432'
+    volumes:
+      - hossain-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d hossain']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: hossain-redis
+    restart: unless-stopped
+    ports:
+      - '6380:6379'
+    volumes:
+      - hossain-redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  hossain-pgdata:
+  hossain-redisdata:
