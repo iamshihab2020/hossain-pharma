@@ -56,6 +56,18 @@ variable renders as a broken colour and is invisible to type-check.
 under it, and regenerating any primitive would reintroduce the errors. Backend
 packages, whose code we own, keep it on.
 
+## Before writing App Router code
+
+**Next 16 has breaking changes from 15**, and the PRD was written against 15.
+Next ships its own docs locally at `node_modules/next/dist/docs/` (resolve from
+this directory, not the repo root - pnpm does not hoist `next`). Read the
+relevant guide there before writing routing, caching, or data-fetching code
+rather than relying on Next 15 habits.
+
+`AGENTS.md` and `CLAUDE.md` in this directory are generated and re-added by
+`next dev`. They are committed on purpose: deleting them only recreates an
+uncommitted change.
+
 ## Scripts
 
 | Command | What it does |

@@ -1,0 +1,6 @@
+{
+  "extends": "@nexmarket/config/tsconfig/node.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src", "noEmit": false },
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
+}
