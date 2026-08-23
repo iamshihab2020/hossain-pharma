@@ -1,0 +1,46 @@
+name: Neon PR branch
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+# Credential-gated on purpose: this skips cleanly until a Neon project exists,
+# so CI stays green before anyone has set the secrets up. See
+# docs/runbook/neon-setup.md.
+jobs:
+  branch:
+    runs-on: ubuntu-latest
+    # Forks cannot read secrets, so skip rather than fail confusingly.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Check for Neon credentials
+        id: creds
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+        run: |
+          if [ -n "$NEON_API_KEY" ] && [ -n "$NEON_PROJECT_ID" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "NEON_API_KEY or NEON_PROJECT_ID not configured; skipping Neon branching."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.present == 'true'
+
+      - name: Create Neon branch
+        if: steps.creds.outputs.present == 'true' && github.event.action != 'closed'
+        uses: neondatabase/create-branch-action@v5
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch_name: pr-${{ github.event.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+
+      - name: Delete Neon branch
+        if: steps.creds.outputs.present == 'true' && github.event.action == 'closed'
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: pr-${{ github.event.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}

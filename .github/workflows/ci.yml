@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main, modernization]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # No database environment variables on purpose. Every suite that needs a
+    # database starts its own via Testcontainers, including the API suite, whose
+    # globalSetup sets DATABASE_URL before any module reads it. Verified by
+    # running the full suite with those variables unset.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm type-check
+
+      # Testcontainers boots a real Postgres per suite; ubuntu-latest ships
+      # Docker. RLS cannot be mocked meaningfully (PRD 7.3), so this has to be a
+      # real database or the isolation proof proves nothing.
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  # Proves success criterion S4 - a clean machine reaches a migrated, seeded
+  # database. Separate from `verify` because it needs a real Postgres service
+  # and exercises the documented one-liner rather than the test harness.
+  spin-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nexmarket
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nexmarket"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://nexmarket_app:nexmarket_dev_password@localhost:5433/nexmarket
+      DATABASE_MIGRATION_URL: postgres://postgres:postgres@localhost:5433/nexmarket
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The compose init script does not run against a GitHub service
+      # container, so the app role is provisioned here with the same
+      # attributes. NOBYPASSRLS is the whole point: a role that can bypass RLS
+      # makes every policy inert.
+      - name: Provision the application role
+        run: psql "$DATABASE_MIGRATION_URL" -f docker/postgres-init/01-app-role.sql
+
+      - name: Assert the app role cannot bypass RLS
+        run: |
+          result=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT rolsuper::text || ',' || rolbypassrls::text FROM pg_roles WHERE rolname='nexmarket_app'")
+          echo "nexmarket_app rolsuper,rolbypassrls = $result"
+          if [ "$result" != "false,false" ]; then
+            echo "::error::nexmarket_app must have rolsuper=false and rolbypassrls=false, got $result"
+            exit 1
+          fi
+
+      - name: Migrate
+        run: pnpm db:push
+
+      - name: Seed
+        run: pnpm seed
+
+      - name: Seed again, to prove it is idempotent
+        run: pnpm seed
+
+      - name: Assert seeded row counts
+        run: |
+          counts=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT (SELECT count(*) FROM countries) || ',' || (SELECT count(*) FROM currencies) || ',' || (SELECT count(*) FROM organisations)")
+          echo "countries,currencies,organisations = $counts"
+          if [ "$counts" != "5,5,8" ]; then
+            echo "::error::expected 5,5,8 after two seed runs, got $counts"
+            exit 1
+          fi
+
+      - name: Assert RLS is enabled AND forced on tenant tables
+        run: |
+          result=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT relrowsecurity::text || ',' || relforcerowsecurity::text FROM pg_class WHERE relname='rls_probe'")
+          echo "rls_probe enabled,forced = $result"
+          if [ "$result" != "true,true" ]; then
+            echo "::error::rls_probe must have RLS enabled and FORCED, got $result"
+            exit 1
+          fi
