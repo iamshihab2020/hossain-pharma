@@ -1,0 +1,7 @@
+{
+  "extends": "@hossain/config/tsconfig/node.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*", "*.config.ts", "eslint.config.js"]
+}
