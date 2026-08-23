@@ -22,7 +22,7 @@ module.exports = tseslint.config(
         {
           paths: [
             {
-              name: '@hossain/db',
+              name: '@nexmarket/db',
               importNames: ['db', 'pool'],
               message:
                 'Import withTenant instead. The raw db/pool handle bypasses RLS tenant context. See PRD 6.4 criterion 2.',

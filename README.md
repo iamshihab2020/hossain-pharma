@@ -1,4 +1,4 @@
-# Hossain Commerce
+# NexMarket
 
 **A universal multi-tenant marketplace — the Daraz / Amazon shape.**
 Any verified seller lists anything. Buyers search across all of them, compare competing offers on one product page, fill a single cart spanning many sellers, and check out once.
@@ -170,12 +170,12 @@ Full findings in [`OVERVIEW.md`](./OVERVIEW.md). Each is mapped to its target-st
 
 This repository is named `hossain-pharma` and its history begins as a pharmacy project. The product is now a **universal marketplace** — pharmacy is not a vertical here, and prescription medicine is explicitly out of scope.
 
-Renaming to **`hossain-commerce`** is planned alongside Phase 0:
+Renaming to **`nexmarket`** is planned alongside Phase 0:
 
 ```bash
-# GitHub: Settings → Repository name → hossain-commerce
+# GitHub: Settings → Repository name → nexmarket
 # GitHub redirects the old URL, so existing clones keep working.
-git remote set-url origin https://github.com/iamshihab2020/hossain-commerce.git
+git remote set-url origin https://github.com/iamshihab2020/nexmarket.git
 ```
 
 Until that happens, the mismatch between the repo name and the product is deliberate and noted here rather than left for a reader to trip over.

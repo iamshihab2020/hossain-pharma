@@ -1,11 +1,11 @@
 {
-  "extends": "@hossain/config/tsconfig/node.json",
+  "extends": "@nexmarket/config/tsconfig/node.json",
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": ".",
     // ESM, not CommonJS. TypeScript refuses a static CJS -> ESM import (TS1479)
-    // even though Node 24 supports require(esm) at runtime, and @hossain/db and
-    // @hossain/shared are ESM. ESM importing CJS always works, so the API is the
+    // even though Node 24 supports require(esm) at runtime, and @nexmarket/db and
+    // @nexmarket/shared are ESM. ESM importing CJS always works, so the API is the
     // side that moves. Decorators are a TS transform and are unaffected by the
     // module system. node16 resolution is required to honour `exports` maps.
     "module": "node16",

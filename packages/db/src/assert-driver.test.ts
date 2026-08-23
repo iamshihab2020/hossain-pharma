@@ -89,7 +89,10 @@ describe('assertInteractiveTransactions', () => {
   });
 
   it('stringifies a rejection that is neither a string nor an Error', async () => {
-    const pool = { connect: () => Promise.reject({ nope: true }) } as unknown as Pool;
+    const pool = {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      connect: () => Promise.reject({ nope: true }),
+    } as unknown as Pool;
 
     await expect(assertInteractiveTransactions(pool)).rejects.toThrow(
       /Driver capability probe failed: \[object Object\]/,

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 // eslint-disable-next-line no-restricted-imports
-import { pool } from '@hossain/db';
+import { pool } from '@nexmarket/db';
 
 // The import above is one of exactly two sanctioned uses of the raw pool
 // outside packages/db (the other is the boot probe in main.ts). This is a

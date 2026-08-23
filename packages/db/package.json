@@ -1,5 +1,5 @@
 {
-  "name": "@hossain/db",
+  "name": "@nexmarket/db",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -26,7 +26,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@hossain/config": "workspace:*",
+    "@nexmarket/config": "workspace:*",
     "@testcontainers/postgresql": "^12.1.0",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^4.1.11",

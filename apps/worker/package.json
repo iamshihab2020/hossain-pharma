@@ -1,25 +1,24 @@
 {
-  "name": "@nexmarket/shared",
+  "name": "@nexmarket/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
     "type-check": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run --coverage"
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "bullmq": "^6.2.0",
+    "ioredis": "^6.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@nexmarket/config": "workspace:*",
-    "@vitest/coverage-v8": "^4.1.11",
+    "tsx": "^4.23.12",
     "vitest": "^4.1.11"
   }
 }

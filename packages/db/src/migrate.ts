@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Migrations connect as the OWNER, not as hossain_app: they need DDL rights the
+ * Migrations connect as the OWNER, not as nexmarket_app: they need DDL rights the
  * application role deliberately does not have.
  *
  * Exposed as `pnpm db:push` at the repo root. That name is kept because it is

@@ -1,3 +1,3 @@
-import config from '@hossain/config/eslint';
+import config from '@nexmarket/config/eslint';
 
 export default config;

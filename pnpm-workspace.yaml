@@ -15,3 +15,6 @@ allowBuilds:
   ssh2: false
   # NestJS analytics phone-home. No functional role.
   '@scarf/scarf': false
+  # Optional native accelerator for BullMQ's msgpackr serialiser.
+  # The pure-JS fallback works; off means CI needs no build toolchain.
+  msgpackr-extract: false

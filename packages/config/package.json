@@ -1,5 +1,5 @@
 {
-  "name": "@hossain/config",
+  "name": "@nexmarket/config",
   "version": "0.0.0",
   "private": true,
   "files": ["tsconfig", "eslint", "tailwind"],

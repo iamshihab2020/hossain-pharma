@@ -11,31 +11,31 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: hossain-postgres
+    container_name: nexmarket-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: hossain
+      POSTGRES_DB: nexmarket
     ports:
       - '5433:5432'
     volumes:
-      - hossain-pgdata:/var/lib/postgresql/data
+      - nexmarket-pgdata:/var/lib/postgresql/data
       - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d hossain']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d nexmarket']
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: hossain-redis
+    container_name: nexmarket-redis
     restart: unless-stopped
     ports:
       - '6380:6379'
     volumes:
-      - hossain-redisdata:/data
+      - nexmarket-redisdata:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -43,5 +43,5 @@ services:
       retries: 10
 
 volumes:
-  hossain-pgdata:
-  hossain-redisdata:
+  nexmarket-pgdata:
+  nexmarket-redisdata:

@@ -1,5 +1,5 @@
 # Product Requirements Document
-# Hossain Commerce — Universal Multi-Tenant Marketplace
+# NexMarket — Universal Multi-Tenant Marketplace
 
 **Migration:** MongoDB + Express + React SPA → **NestJS + Neon Postgres + Next.js 15**
 
@@ -7,7 +7,7 @@
 |---|---|
 | **Version** | 2.0 |
 | **Date** | 2026-08-23 |
-| **Author** | Sheikh Shihab Hossain |
+| **Author** | Sheikh Shihab NexMarket |
 | **Status** | Approved — ready for Phase 0 |
 | **Supersedes** | `old-code/` (React 18 SPA + Express monolith) |
 | **Companion** | [`OVERVIEW.md`](../OVERVIEW.md) — audit of the system being replaced |
@@ -304,7 +304,7 @@ The browser never talks to the API directly. All calls originate server-side fro
 ### 7.2 Repository layout
 
 ```
-hossain-commerce/
+nexmarket/
 ├── apps/
 │   ├── api/                  NestJS — REST + OpenAPI
 │   │   └── src/modules/      auth · tenancy · catalogue · search · cart

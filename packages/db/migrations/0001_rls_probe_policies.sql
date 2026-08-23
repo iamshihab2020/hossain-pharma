@@ -37,14 +37,14 @@ CREATE POLICY platform_admin_bypass ON "rls_probe"
 -- that script, and Neon is provisioned by hand. Without the schema grant those
 -- suites fail with "permission denied for schema public" and look like an RLS
 -- failure when they are nothing of the kind.
-GRANT USAGE ON SCHEMA public TO hossain_app;
+GRANT USAGE ON SCHEMA public TO nexmarket_app;
 --> statement-breakpoint
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO hossain_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nexmarket_app;
 --> statement-breakpoint
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO hossain_app;
---> statement-breakpoint
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO hossain_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexmarket_app;
 --> statement-breakpoint
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO hossain_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nexmarket_app;
+--> statement-breakpoint
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO nexmarket_app;

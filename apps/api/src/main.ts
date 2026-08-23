@@ -3,7 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 // eslint-disable-next-line no-restricted-imports
-import { assertInteractiveTransactions, pool } from '@hossain/db';
+import { assertInteractiveTransactions, pool } from '@nexmarket/db';
 import { AppModule } from './app.module.js';
 import { loadApiEnv } from './config/env.js';
 
@@ -23,7 +23,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
 
   const config = new DocumentBuilder()
-    .setTitle('Hossain Commerce API')
+    .setTitle('NexMarket API')
     .setDescription('Universal multi-tenant marketplace')
     .setVersion('0.1.0')
     .build();

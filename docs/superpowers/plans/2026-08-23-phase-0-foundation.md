@@ -48,7 +48,7 @@ Phase 1 owns `users`, `sessions`, `org_members` and the real RLS policies. Phase
 ## File Structure
 
 ```
-hossain-commerce/
+nexmarket/
 ├── package.json                     workspace root, scripts, engines
 ├── pnpm-workspace.yaml              workspace globs
 ├── turbo.json                       task graph and caching
@@ -150,7 +150,7 @@ packages:
 
 ```json
 {
-  "name": "hossain-commerce",
+  "name": "nexmarket",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.0.9",
@@ -164,10 +164,10 @@ packages:
     "lint": "turbo run lint",
     "type-check": "turbo run type-check",
     "test": "turbo run test",
-    "db:generate": "pnpm --filter @hossain/db run generate",
-    "db:push": "pnpm --filter @hossain/db run migrate",
-    "db:migrate": "pnpm --filter @hossain/db run migrate",
-    "seed": "pnpm --filter @hossain/db run seed",
+    "db:generate": "pnpm --filter @nexmarket/db run generate",
+    "db:push": "pnpm --filter @nexmarket/db run migrate",
+    "db:migrate": "pnpm --filter @nexmarket/db run migrate",
+    "seed": "pnpm --filter @nexmarket/db run seed",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down"
   },
@@ -307,13 +307,13 @@ git commit -m "chore: convert repo to pnpm+turborepo monorepo, archive legacy co
 
 **Interfaces:**
 - Consumes: the workspace from Task 1.
-- Produces: package name `@hossain/config`. Consumers extend `@hossain/config/tsconfig/node.json` or `.../nextjs.json`, and Tailwind consumers do `presets: [require('@hossain/config/tailwind/preset')]`.
+- Produces: package name `@nexmarket/config`. Consumers extend `@nexmarket/config/tsconfig/node.json` or `.../nextjs.json`, and Tailwind consumers do `presets: [require('@nexmarket/config/tailwind/preset')]`.
 
 - [ ] **Step 1: Create `packages/config/package.json`**
 
 ```json
 {
-  "name": "@hossain/config",
+  "name": "@nexmarket/config",
   "version": "0.0.0",
   "private": true,
   "files": ["tsconfig", "eslint", "tailwind"],
@@ -482,8 +482,8 @@ This is real domain logic and the spec requires **100% coverage** on it (§13). 
 - Test: `packages/shared/src/money.test.ts`
 
 **Interfaces:**
-- Consumes: `@hossain/config/tsconfig/node.json`.
-- Produces: package `@hossain/shared` exporting
+- Consumes: `@nexmarket/config/tsconfig/node.json`.
+- Produces: package `@nexmarket/shared` exporting
   - `type Money = { readonly amount: number; readonly currency: string }`
   - `money(amount: number, currency: string): Money`
   - `add(a: Money, b: Money): Money`
@@ -501,14 +501,14 @@ This is real domain logic and the spec requires **100% coverage** on it (§13). 
 
 ```bash
 mkdir -p packages/shared/src
-pnpm --filter @hossain/shared add -D vitest @vitest/coverage-v8
+pnpm --filter @nexmarket/shared add -D vitest @vitest/coverage-v8
 ```
 
 Create `packages/shared/package.json`:
 
 ```json
 {
-  "name": "@hossain/shared",
+  "name": "@nexmarket/shared",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -528,7 +528,7 @@ Create `packages/shared/tsconfig.json`:
 
 ```json
 {
-  "extends": "@hossain/config/tsconfig/node.json",
+  "extends": "@nexmarket/config/tsconfig/node.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src", "composite": true },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
@@ -687,7 +687,7 @@ describe('helpers', () => {
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
-Run: `pnpm --filter @hossain/shared test`
+Run: `pnpm --filter @nexmarket/shared test`
 Expected: FAIL — `Failed to resolve import "./money.js"`.
 
 - [ ] **Step 4: Write the implementation**
@@ -815,7 +815,7 @@ export * from './money.js';
 
 - [ ] **Step 5: Run the tests to verify they pass at 100% coverage**
 
-Run: `pnpm --filter @hossain/shared test`
+Run: `pnpm --filter @nexmarket/shared test`
 Expected: PASS, all tests green, and the coverage table shows 100% on `src/money.ts` for lines, functions, branches, and statements. If any threshold is under 100 the run fails — add the missing test rather than lowering the threshold.
 
 - [ ] **Step 6: Commit**
@@ -835,9 +835,9 @@ git commit -m "feat(shared): Money primitive in integer minor units with lossles
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: a Postgres 16 instance on `localhost:5432` reachable as `postgres://hossain_app:hossain_dev_password@localhost:5432/hossain` and a Redis 7 instance on `localhost:6379`. Later tasks assume the env var names defined in `.env.example`.
+- Produces: a Postgres 16 instance on `localhost:5432` reachable as `postgres://nexmarket_app:nexmarket_dev_password@localhost:5432/nexmarket` and a Redis 7 instance on `localhost:6379`. Later tasks assume the env var names defined in `.env.example`.
 
-The Postgres container bootstraps **two roles**: the superuser `postgres` for migrations, and `hossain_app`, a non-superuser role without `BYPASSRLS` that the application connects as. This split is the whole point — see Task 7.
+The Postgres container bootstraps **two roles**: the superuser `postgres` for migrations, and `nexmarket_app`, a non-superuser role without `BYPASSRLS` that the application connects as. This split is the whole point — see Task 7.
 
 - [ ] **Step 1: Create `docker-compose.yml`**
 
@@ -845,31 +845,31 @@ The Postgres container bootstraps **two roles**: the superuser `postgres` for mi
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: hossain-postgres
+    container_name: nexmarket-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: hossain
+      POSTGRES_DB: nexmarket
     ports:
       - '5432:5432'
     volumes:
-      - hossain-pgdata:/var/lib/postgresql/data
+      - nexmarket-pgdata:/var/lib/postgresql/data
       - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d hossain']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d nexmarket']
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: hossain-redis
+    container_name: nexmarket-redis
     restart: unless-stopped
     ports:
       - '6379:6379'
     volumes:
-      - hossain-redisdata:/data
+      - nexmarket-redisdata:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -877,8 +877,8 @@ services:
       retries: 10
 
 volumes:
-  hossain-pgdata:
-  hossain-redisdata:
+  nexmarket-pgdata:
+  nexmarket-redisdata:
 ```
 
 - [ ] **Step 2: Create the init script that provisions the application role**
@@ -886,28 +886,28 @@ volumes:
 Create `docker/postgres-init/01-app-role.sql`:
 
 ```sql
--- The application connects as hossain_app, never as the superuser.
+-- The application connects as nexmarket_app, never as the superuser.
 -- A superuser and any role with BYPASSRLS silently ignores every RLS policy,
 -- which makes tenant isolation look correct in tests while enforcing nothing.
-CREATE ROLE hossain_app WITH LOGIN PASSWORD 'hossain_dev_password' NOBYPASSRLS;
+CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'nexmarket_dev_password' NOBYPASSRLS;
 
-GRANT CONNECT ON DATABASE hossain TO hossain_app;
-GRANT USAGE ON SCHEMA public TO hossain_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO hossain_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO hossain_app;
+GRANT CONNECT ON DATABASE nexmarket TO nexmarket_app;
+GRANT USAGE ON SCHEMA public TO nexmarket_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nexmarket_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexmarket_app;
 
 -- Everything created later by the migration role is granted automatically.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO hossain_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nexmarket_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO hossain_app;
+  GRANT USAGE, SELECT ON SEQUENCES TO nexmarket_app;
 ```
 
 - [ ] **Step 3: Create `.env.example`**
 
 ```bash
 # ---------------------------------------------------------------------------
-# Hossain Commerce - environment contract
+# NexMarket - environment contract
 # Copy to .env and adjust. Every variable here is validated at startup by zod;
 # a missing or malformed value fails the boot rather than surfacing at runtime.
 # ---------------------------------------------------------------------------
@@ -915,13 +915,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 NODE_ENV=development
 
 # --- Database ---------------------------------------------------------------
-# The APPLICATION connects as hossain_app: a role WITHOUT bypassrls, so RLS
+# The APPLICATION connects as nexmarket_app: a role WITHOUT bypassrls, so RLS
 # policies actually apply. See PRD section 6.3 and docs/architecture/0003.
-DATABASE_URL=postgres://hossain_app:hossain_dev_password@localhost:5432/hossain
+DATABASE_URL=postgres://nexmarket_app:nexmarket_dev_password@localhost:5432/nexmarket
 
 # MIGRATIONS connect as the owner, which needs DDL rights the app role lacks.
 # On Neon this is the neondb_owner connection string.
-DATABASE_MIGRATION_URL=postgres://postgres:postgres@localhost:5432/hossain
+DATABASE_MIGRATION_URL=postgres://postgres:postgres@localhost:5432/nexmarket
 
 # --- Redis ------------------------------------------------------------------
 REDIS_URL=redis://localhost:6379
@@ -938,13 +938,13 @@ API_INTERNAL_URL=http://localhost:4000
 - [ ] **Step 4: Bring the stack up and verify both services are healthy**
 
 Run: `docker compose up -d && docker compose ps`
-Expected: both `hossain-postgres` and `hossain-redis` report `healthy`.
+Expected: both `nexmarket-postgres` and `nexmarket-redis` report `healthy`.
 
 - [ ] **Step 5: Verify the app role exists and cannot bypass RLS**
 
 Run:
 ```bash
-docker exec hossain-postgres psql -U postgres -d hossain -c "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'hossain_app';"
+docker exec nexmarket-postgres psql -U postgres -d nexmarket -c "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'nexmarket_app';"
 ```
 Expected: one row, `rolsuper = f`, `rolbypassrls = f`. If either is `t`, RLS will not be enforced and Task 7 will produce a false pass.
 
@@ -964,8 +964,8 @@ git commit -m "feat(infra): docker compose for postgres and redis with a non-byp
 - Test: `packages/db/src/assert-driver.test.ts`
 
 **Interfaces:**
-- Consumes: `@hossain/config`, the Docker Postgres from Task 4.
-- Produces: package `@hossain/db` exporting
+- Consumes: `@nexmarket/config`, the Docker Postgres from Task 4.
+- Produces: package `@nexmarket/db` exporting
   - `pool: Pool` (node-postgres)
   - `db: NodePgDatabase<typeof schema>`
   - `assertInteractiveTransactions(pool: Pool): Promise<void>`
@@ -976,15 +976,15 @@ git commit -m "feat(infra): docker compose for postgres and redis with a non-byp
 
 ```bash
 mkdir -p packages/db/src
-pnpm --filter @hossain/db add drizzle-orm pg zod
-pnpm --filter @hossain/db add -D drizzle-kit @types/pg vitest @vitest/coverage-v8 testcontainers @testcontainers/postgresql tsx
+pnpm --filter @nexmarket/db add drizzle-orm pg zod
+pnpm --filter @nexmarket/db add -D drizzle-kit @types/pg vitest @vitest/coverage-v8 testcontainers @testcontainers/postgresql tsx
 ```
 
 Create `packages/db/package.json`:
 
 ```json
 {
-  "name": "@hossain/db",
+  "name": "@nexmarket/db",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -1007,7 +1007,7 @@ Create `packages/db/tsconfig.json`:
 
 ```json
 {
-  "extends": "@hossain/config/tsconfig/node.json",
+  "extends": "@nexmarket/config/tsconfig/node.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src", "composite": true },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
@@ -1105,7 +1105,7 @@ describe('assertInteractiveTransactions', () => {
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `pnpm --filter @hossain/db test`
+Run: `pnpm --filter @nexmarket/db test`
 Expected: FAIL — `Failed to resolve import "./assert-driver.js"`.
 
 - [ ] **Step 5: Write the driver assertion**
@@ -1165,7 +1165,7 @@ export async function assertInteractiveTransactions(pool: Pool): Promise<void> {
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `pnpm --filter @hossain/db test`
+Run: `pnpm --filter @nexmarket/db test`
 Expected: PASS, both cases green.
 
 - [ ] **Step 7: Write the client and Drizzle config**
@@ -1353,7 +1353,7 @@ export * from './rls-probe.js';
 
 - [ ] **Step 5: Generate the initial migration**
 
-Run: `pnpm --filter @hossain/db run generate`
+Run: `pnpm --filter @nexmarket/db run generate`
 Expected: a file appears at `packages/db/migrations/0000_<generated-name>.sql` containing `CREATE TYPE "org_status"`, `CREATE TABLE "countries"`, `"currencies"`, `"organisations"`, `"rls_probe"`.
 
 Inspect the generated SQL before continuing. Drizzle Kit generates only what the schema expresses; it cannot generate RLS, which is why Step 6 is hand-written.
@@ -1391,14 +1391,14 @@ CREATE POLICY platform_admin_bypass ON "rls_probe"
 -- container that never sees docker/postgres-init, and Neon is provisioned by hand.
 -- Without the schema grant, those tests fail on "permission denied for schema public"
 -- and look like an RLS failure when they are nothing of the kind.
-GRANT USAGE ON SCHEMA public TO hossain_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO hossain_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO hossain_app;
+GRANT USAGE ON SCHEMA public TO nexmarket_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nexmarket_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexmarket_app;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO hossain_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nexmarket_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO hossain_app;
+  GRANT USAGE, SELECT ON SEQUENCES TO nexmarket_app;
 ```
 
 Every future migration that creates a tenant-owned table repeats the `ENABLE` / `FORCE` / `CREATE POLICY` trio. Phase 1 factors that into a helper once there are enough tables to justify it; doing it now would abstract over a single case.
@@ -1419,7 +1419,7 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Migrations connect as the OWNER, not as hossain_app: they need DDL rights the
+ * Migrations connect as the OWNER, not as nexmarket_app: they need DDL rights the
  * application role deliberately does not have.
  */
 export async function runMigrations(): Promise<void> {
@@ -1459,7 +1459,7 @@ Expected: `Migrations applied.`
 
 Run:
 ```bash
-docker exec hossain-postgres psql -U postgres -d hossain -c "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'rls_probe';"
+docker exec nexmarket-postgres psql -U postgres -d nexmarket -c "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'rls_probe';"
 ```
 Expected: one row with `relrowsecurity = t` and `relforcerowsecurity = t`. If `relforcerowsecurity` is `f`, the owner bypasses the policy and Task 7 will pass for the wrong reason.
 
@@ -1520,7 +1520,7 @@ beforeAll(async () => {
   const ownerPool = new Pool({ connectionString: container.getConnectionUri(), max: 1 });
   const ownerDb = drizzle(ownerPool);
   await ownerDb.execute(
-    sql`CREATE ROLE hossain_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`,
+    sql`CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`,
   );
   await migrate(ownerDb, { migrationsFolder: join(here, '..', 'migrations') });
 
@@ -1546,9 +1546,9 @@ beforeAll(async () => {
   ]);
   await ownerPool.end();
 
-  // The APP connects as hossain_app, which cannot bypass RLS.
+  // The APP connects as nexmarket_app, which cannot bypass RLS.
   const uri = new URL(container.getConnectionUri());
-  uri.username = 'hossain_app';
+  uri.username = 'nexmarket_app';
   uri.password = 'probe';
   appPool = new Pool({ connectionString: uri.toString(), max: 5 });
   appDb = drizzle(appPool, { schema });
@@ -1652,7 +1652,7 @@ describe('withTenant', () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pnpm --filter @hossain/db test`
+Run: `pnpm --filter @nexmarket/db test`
 Expected: FAIL — `Failed to resolve import "./tenant-context.js"`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1708,7 +1708,7 @@ export const withTenant = makeWithTenant(defaultDb);
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pnpm --filter @hossain/db test`
+Run: `pnpm --filter @nexmarket/db test`
 Expected: PASS. All eight assertions green, including the concurrency test and the leak test.
 
 If `refuses a write attributed to another tenant` passes but `sees only its own tenant rows` returns 2 rows, the connecting role is bypassing RLS — re-check Task 4 Step 5 and Task 6 Step 9.
@@ -1747,7 +1747,7 @@ Add to `packages/config/eslint/index.js` inside the `rules` object of the main c
 ```js
       'no-restricted-imports': ['error', {
         paths: [{
-          name: '@hossain/db',
+          name: '@nexmarket/db',
           importNames: ['db', 'pool'],
           message: 'Import withTenant instead. Raw db bypasses RLS tenant context. See PRD 6.4 criterion 2.',
         }],
@@ -1758,7 +1758,7 @@ This is §6.4 acceptance criterion 2. It is written now, in Phase 0, because a r
 
 - [ ] **Step 7: Run the full db test suite with coverage**
 
-Run: `pnpm --filter @hossain/db test -- --coverage`
+Run: `pnpm --filter @nexmarket/db test -- --coverage`
 Expected: PASS at 100% on `tenant-context.ts` and `assert-driver.ts`.
 
 - [ ] **Step 8: Commit**
@@ -1807,7 +1807,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   pool = new Pool({ connectionString: container.getConnectionUri(), max: 2 });
   db = drizzle(pool, { schema });
-  await db.execute(sql`CREATE ROLE hossain_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`);
+  await db.execute(sql`CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`);
   await migrate(drizzle(pool), { migrationsFolder: join(here, '..', '..', 'migrations') });
 }, 180_000);
 
@@ -1845,7 +1845,7 @@ describe('seed', () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @hossain/db test seed`
+Run: `pnpm --filter @nexmarket/db test seed`
 Expected: FAIL — `Failed to resolve import "./index.js"` from the seed directory.
 
 - [ ] **Step 3: Write the reference data seeder**
@@ -1959,7 +1959,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `pnpm --filter @hossain/db test seed`
+Run: `pnpm --filter @nexmarket/db test seed`
 Expected: PASS, all three cases green including idempotency.
 
 - [ ] **Step 7: Run the seed against local Postgres end to end**
@@ -1986,23 +1986,23 @@ git commit -m "feat(db): idempotent seed harness with reference data and 8 selle
 - Test: `apps/api/test/health.e2e.test.ts`
 
 **Interfaces:**
-- Consumes: `@hossain/db` (`pool`, `assertInteractiveTransactions`), `@hossain/config`.
+- Consumes: `@nexmarket/db` (`pool`, `assertInteractiveTransactions`), `@nexmarket/config`.
 - Produces: an API on `http://localhost:4000` with `GET /health` returning `{ status: 'ok', database: 'ok' }` and OpenAPI JSON at `/docs-json`.
 
 - [ ] **Step 1: Scaffold the app**
 
 ```bash
 mkdir -p apps/api/src/health apps/api/test
-pnpm --filter @hossain/api add @nestjs/common @nestjs/core @nestjs/platform-fastify @nestjs/swagger @nestjs/config zod
-pnpm --filter @hossain/api add @hossain/db@workspace:* @hossain/shared@workspace:* @hossain/config@workspace:*
-pnpm --filter @hossain/api add -D @nestjs/cli @nestjs/testing typescript vitest supertest @types/supertest tsx
+pnpm --filter @nexmarket/api add @nestjs/common @nestjs/core @nestjs/platform-fastify @nestjs/swagger @nestjs/config zod
+pnpm --filter @nexmarket/api add @nexmarket/db@workspace:* @nexmarket/shared@workspace:* @nexmarket/config@workspace:*
+pnpm --filter @nexmarket/api add -D @nestjs/cli @nestjs/testing typescript vitest supertest @types/supertest tsx
 ```
 
 Create `apps/api/package.json`:
 
 ```json
 {
-  "name": "@hossain/api",
+  "name": "@nexmarket/api",
   "version": "0.0.0",
   "private": true,
   "scripts": {
@@ -2031,7 +2031,7 @@ Create `apps/api/tsconfig.json`:
 
 ```json
 {
-  "extends": "@hossain/config/tsconfig/node.json",
+  "extends": "@nexmarket/config/tsconfig/node.json",
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": ".",
@@ -2106,7 +2106,7 @@ describe('GET /health', () => {
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `pnpm --filter @hossain/api test`
+Run: `pnpm --filter @nexmarket/api test`
 Expected: FAIL — cannot resolve `../src/app.module.js`.
 
 - [ ] **Step 5: Write the health module**
@@ -2116,7 +2116,7 @@ Create `apps/api/src/health/health.controller.ts`:
 ```ts
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
-import { pool } from '@hossain/db';
+import { pool } from '@nexmarket/db';
 
 @ApiTags('health')
 @Controller('health')
@@ -2164,7 +2164,7 @@ Create `apps/api/src/main.ts`:
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { assertInteractiveTransactions, pool } from '@hossain/db';
+import { assertInteractiveTransactions, pool } from '@nexmarket/db';
 import { AppModule } from './app.module.js';
 import { loadApiEnv } from './env.js';
 
@@ -2179,7 +2179,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
 
   const config = new DocumentBuilder()
-    .setTitle('Hossain Commerce API')
+    .setTitle('NexMarket API')
     .setDescription('Universal multi-tenant marketplace')
     .setVersion('0.1.0')
     .build();
@@ -2199,14 +2199,14 @@ bootstrap().catch((error: unknown) => {
 
 - [ ] **Step 7: Run the test to verify it passes**
 
-Run: `docker compose up -d && pnpm --filter @hossain/api test`
+Run: `docker compose up -d && pnpm --filter @nexmarket/api test`
 Expected: PASS.
 
 - [ ] **Step 8: Verify the startup assertion actually blocks a bad driver**
 
 Run:
 ```bash
-DATABASE_URL=postgres://hossain_app:hossain_dev_password@localhost:9999/hossain pnpm --filter @hossain/api run build && DATABASE_URL=postgres://hossain_app:hossain_dev_password@localhost:9999/hossain node apps/api/dist/main.js
+DATABASE_URL=postgres://nexmarket_app:nexmarket_dev_password@localhost:9999/nexmarket pnpm --filter @nexmarket/api run build && DATABASE_URL=postgres://nexmarket_app:nexmarket_dev_password@localhost:9999/nexmarket node apps/api/dist/main.js
 ```
 Expected: the process exits non-zero with `Driver capability probe failed`, and no port is opened. This proves the assertion is on the boot path rather than decorative.
 
@@ -2226,7 +2226,7 @@ git commit -m "feat(api): NestJS on Fastify with health, OpenAPI, and the boot-t
 - Copy: 32 files from `archive/frontend/components/ui/` to `apps/web/components/ui/`
 
 **Interfaces:**
-- Consumes: `@hossain/config/tailwind/preset`, `@hossain/config/tailwind/globals.css`.
+- Consumes: `@nexmarket/config/tailwind/preset`, `@nexmarket/config/tailwind/globals.css`.
 - Produces: a Next.js app on `http://localhost:3000` that builds clean.
 
 §12.1 governs what is salvaged. **Nothing else** comes across: no pages, no `lib/api/*`, no Zustand stores, no `lib/mock-data/`, no `lib/firebase/`, no `components/pages/home/*`.
@@ -2235,9 +2235,9 @@ git commit -m "feat(api): NestJS on Fastify with health, OpenAPI, and the boot-t
 
 ```bash
 mkdir -p apps/web/app apps/web/components/ui apps/web/lib
-pnpm --filter @hossain/web add next react react-dom clsx tailwind-merge class-variance-authority lucide-react
-pnpm --filter @hossain/web add @hossain/config@workspace:* @hossain/shared@workspace:*
-pnpm --filter @hossain/web add -D typescript @types/react @types/react-dom @types/node tailwindcss postcss autoprefixer tailwindcss-animate
+pnpm --filter @nexmarket/web add next react react-dom clsx tailwind-merge class-variance-authority lucide-react
+pnpm --filter @nexmarket/web add @nexmarket/config@workspace:* @nexmarket/shared@workspace:*
+pnpm --filter @nexmarket/web add -D typescript @types/react @types/react-dom @types/node tailwindcss postcss autoprefixer tailwindcss-animate
 ```
 
 Radix packages are added per primitive in Step 3, after the copy shows which are actually referenced.
@@ -2246,7 +2246,7 @@ Create `apps/web/package.json`:
 
 ```json
 {
-  "name": "@hossain/web",
+  "name": "@nexmarket/web",
   "version": "0.0.0",
   "private": true,
   "scripts": {
@@ -2264,7 +2264,7 @@ Create `apps/web/tsconfig.json`:
 
 ```json
 {
-  "extends": "@hossain/config/tsconfig/nextjs.json",
+  "extends": "@nexmarket/config/tsconfig/nextjs.json",
   "compilerOptions": {
     "baseUrl": ".",
     "paths": { "@/*": ["./*"] }
@@ -2294,7 +2294,7 @@ grep -rho '@radix-ui/[a-z-]*' apps/web/components/ui | sort -u
 Install each package the grep reports, plus the non-Radix runtime imports the primitives use. Based on the archived `package.json` these are `react-day-picker`, `embla-carousel-react`, `react-hook-form`, `@hookform/resolvers`, and `date-fns`; confirm against the grep rather than assuming, because the archived manifest also lists packages only the deleted pages used.
 
 ```bash
-pnpm --filter @hossain/web add <every package the grep reported>
+pnpm --filter @nexmarket/web add <every package the grep reported>
 ```
 
 - [ ] **Step 4: Wire Tailwind to the shared preset**
@@ -2303,7 +2303,7 @@ Create `apps/web/tailwind.config.ts`:
 
 ```ts
 import type { Config } from 'tailwindcss';
-import preset from '@hossain/config/tailwind/preset';
+import preset from '@nexmarket/config/tailwind/preset';
 
 export default {
   presets: [preset],
@@ -2327,7 +2327,7 @@ export default {
 Create `apps/web/app/globals.css`:
 
 ```css
-@import '@hossain/config/tailwind/globals.css';
+@import '@nexmarket/config/tailwind/globals.css';
 ```
 
 - [ ] **Step 5: Create `components.json` with the `hooks` alias FIXED**
@@ -2369,7 +2369,7 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Hossain Commerce',
+  title: 'NexMarket',
   description: 'A universal multi-tenant marketplace',
 };
 
@@ -2394,7 +2394,7 @@ import { Button } from '@/components/ui/button';
 export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-6 p-8">
-      <h1 className="text-4xl font-bold tracking-tight">Hossain Commerce</h1>
+      <h1 className="text-4xl font-bold tracking-tight">NexMarket</h1>
       <p className="text-muted-foreground">
         Phase 0 foundation. The storefront lands in Phase 2.
       </p>
@@ -2413,7 +2413,7 @@ import type { NextConfig } from 'next';
 
 const config: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['@hossain/shared'],
+  transpilePackages: ['@nexmarket/shared'],
 };
 
 export default config;
@@ -2421,14 +2421,14 @@ export default config;
 
 - [ ] **Step 7: Verify the build succeeds**
 
-Run: `pnpm --filter @hossain/web run build`
+Run: `pnpm --filter @nexmarket/web run build`
 Expected: `Compiled successfully`. If any primitive fails to resolve an import, install the missing package — do not delete the primitive.
 
 This is the step the previous rewrite never reached. The archived `frontend/` had two pages resolving to `/` and had never been built because `node_modules` was never installed.
 
 - [ ] **Step 8: Verify the dev server renders**
 
-Run: `pnpm --filter @hossain/web run dev`
+Run: `pnpm --filter @nexmarket/web run dev`
 Expected: `http://localhost:3000` renders the heading and a styled button. A visibly unstyled button means the Tailwind preset and `globals.css` tokens are out of sync — revisit Task 2 Step 8.
 
 - [ ] **Step 9: Commit**
@@ -2454,15 +2454,15 @@ git commit -m "feat(web): Next.js 15 app with 32 salvaged shadcn primitives and 
 
 ```bash
 mkdir -p apps/worker/src
-pnpm --filter @hossain/worker add bullmq ioredis zod
-pnpm --filter @hossain/worker add -D vitest tsx typescript
+pnpm --filter @nexmarket/worker add bullmq ioredis zod
+pnpm --filter @nexmarket/worker add -D vitest tsx typescript
 ```
 
 Create `apps/worker/package.json`:
 
 ```json
 {
-  "name": "@hossain/worker",
+  "name": "@nexmarket/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -2481,7 +2481,7 @@ Create `apps/worker/tsconfig.json`:
 
 ```json
 {
-  "extends": "@hossain/config/tsconfig/node.json",
+  "extends": "@nexmarket/config/tsconfig/node.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src" },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
@@ -2517,7 +2517,7 @@ describe('QUEUE_NAMES', () => {
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `pnpm --filter @hossain/worker test`
+Run: `pnpm --filter @nexmarket/worker test`
 Expected: FAIL — cannot resolve `./queues.js`.
 
 - [ ] **Step 4: Write the queue registry**
@@ -2600,12 +2600,12 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `pnpm --filter @hossain/worker test`
+Run: `pnpm --filter @nexmarket/worker test`
 Expected: PASS.
 
 - [ ] **Step 7: Verify the worker connects to Redis**
 
-Run: `docker compose up -d && pnpm --filter @hossain/worker run dev`
+Run: `docker compose up -d && pnpm --filter @nexmarket/worker run dev`
 Expected: `Worker online. Queues: email, import, reindex, settlement`. Ctrl-C prints the drain message and exits 0.
 
 - [ ] **Step 8: Commit**
@@ -2624,7 +2624,7 @@ git commit -m "feat(worker): BullMQ consumer skeleton with typed queue registry"
 - Test: `scripts/mongo-etl/src/transform.test.ts`
 
 **Interfaces:**
-- Consumes: `@hossain/shared` (money helpers).
+- Consumes: `@nexmarket/shared` (money helpers).
 - Produces: `extract`, `transform`, `verify` functions and a CLI. Phase 0 delivers the skeleton plus the transform functions that need no database; the load stage is stubbed and lands with the schema it targets.
 
 §12.1 names four hazards; the transform tests below cover the three that are pure functions. The fourth (orphaned `cartIds`) needs the load stage.
@@ -2633,16 +2633,16 @@ git commit -m "feat(worker): BullMQ consumer skeleton with typed queue registry"
 
 ```bash
 mkdir -p scripts/mongo-etl/src
-pnpm --filter @hossain/mongo-etl add mongodb zod
-pnpm --filter @hossain/mongo-etl add @hossain/shared@workspace:*
-pnpm --filter @hossain/mongo-etl add -D vitest tsx typescript
+pnpm --filter @nexmarket/mongo-etl add mongodb zod
+pnpm --filter @nexmarket/mongo-etl add @nexmarket/shared@workspace:*
+pnpm --filter @nexmarket/mongo-etl add -D vitest tsx typescript
 ```
 
 Create `scripts/mongo-etl/package.json`:
 
 ```json
 {
-  "name": "@hossain/mongo-etl",
+  "name": "@nexmarket/mongo-etl",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -2808,7 +2808,7 @@ describe('dedupeAds', () => {
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `pnpm --filter @hossain/mongo-etl test`
+Run: `pnpm --filter @nexmarket/mongo-etl test`
 Expected: FAIL — cannot resolve `./transform.js`.
 
 - [ ] **Step 5: Write the transform module**
@@ -2816,7 +2816,7 @@ Expected: FAIL — cannot resolve `./transform.js`.
 Create `scripts/mongo-etl/src/transform.ts`:
 
 ```ts
-import { money, type Money } from '@hossain/shared';
+import { money, type Money } from '@nexmarket/shared';
 
 const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
 
@@ -2871,7 +2871,7 @@ export function dedupeAds(ads: LegacyAd[], approvedAds: LegacyAd[]): MergedAd[] 
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `pnpm --filter @hossain/mongo-etl test`
+Run: `pnpm --filter @nexmarket/mongo-etl test`
 Expected: PASS, all 13 cases green.
 
 - [ ] **Step 7: Write the extract, verify, and CLI skeletons**
@@ -3106,9 +3106,9 @@ jobs:
 Create `docs/runbook/neon-setup.md` recording, as an explicit checklist for whoever has the account:
 
 1. Create a Neon project; note the project ID.
-2. Create a role `hossain_app` in the Neon SQL editor with `NOBYPASSRLS`, and grant it as in `docker/postgres-init/01-app-role.sql`. **`neondb_owner` carries `rolbypassrls` and must never be the application's `DATABASE_URL`** — using it makes every RLS policy inert.
+2. Create a role `nexmarket_app` in the Neon SQL editor with `NOBYPASSRLS`, and grant it as in `docker/postgres-init/01-app-role.sql`. **`neondb_owner` carries `rolbypassrls` and must never be the application's `DATABASE_URL`** — using it makes every RLS policy inert.
 3. Set repository secret `NEON_API_KEY` and repository variable `NEON_PROJECT_ID`.
-4. Set `DATABASE_URL` (as `hossain_app`) and `DATABASE_MIGRATION_URL` (as `neondb_owner`) in the deploy environment.
+4. Set `DATABASE_URL` (as `nexmarket_app`) and `DATABASE_MIGRATION_URL` (as `neondb_owner`) in the deploy environment.
 5. Verify with `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user;` connected via `DATABASE_URL` — it must return `f`.
 
 - [ ] **Step 4: Verify CI locally before pushing**
@@ -3161,7 +3161,7 @@ Record the reason from PRD §7.3 verbatim: RLS needs per-request session variabl
 The most important ADR in Phase 0. Record:
 - Tenant context is set with `set_config(..., true)`, never plain `SET`, and always inside a transaction. Explain the leak mechanism.
 - `FORCE ROW LEVEL SECURITY` is required, because the table owner bypasses policies without it.
-- The application connects as `hossain_app`, a role with `NOBYPASSRLS`. On Neon, `neondb_owner` carries `rolbypassrls` and must never be the app's `DATABASE_URL`.
+- The application connects as `nexmarket_app`, a role with `NOBYPASSRLS`. On Neon, `neondb_owner` carries `rolbypassrls` and must never be the app's `DATABASE_URL`.
 - The four §6.4 acceptance criteria and where each is discharged: criterion 2 (lint rule) and criteria 3 and 4 (tests) land in Phase 0; criterion 1 (the NestJS interceptor) lands in Phase 1 with the first tenant-scoped route.
 
 - [ ] **Step 5: Write ADR 0004 — local Docker for dev, Neon for deploy**
@@ -3188,7 +3188,7 @@ Do not overstate. §13 requires a true README, and OVERVIEW.md documents that al
 - [ ] **Step 8: Verify the README's central claim by running it on a clean checkout**
 
 ```bash
-git clone . /tmp/hossain-clean && cd /tmp/hossain-clean
+git clone . /tmp/nexmarket-clean && cd /tmp/nexmarket-clean
 cp .env.example .env
 pnpm install && docker compose up -d && pnpm db:push && pnpm seed
 ```

@@ -1,4 +1,4 @@
-# @hossain/api
+# @nexmarket/api
 
 NestJS 11 on Fastify. REST with an OpenAPI document generated from decorators.
 
@@ -43,7 +43,7 @@ the boot probe in `main.ts` and `HealthService`.
 is public because it is explicitly marked, never by omission.
 
 **File extensions in imports are `.js`.** This package is ESM (`"type":
-"module"`), because `@hossain/db` and `@hossain/shared` are ESM and TypeScript
+"module"`), because `@nexmarket/db` and `@nexmarket/shared` are ESM and TypeScript
 refuses a static CommonJS-to-ESM import. Decorators are unaffected.
 
 ## Modules to come

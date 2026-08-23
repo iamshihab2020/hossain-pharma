@@ -19,7 +19,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   pool = new Pool({ connectionString: container.getConnectionUri(), max: 2 });
   db = drizzle(pool, { schema });
-  await db.execute(sql`CREATE ROLE hossain_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`);
+  await db.execute(sql`CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`);
   await migrate(drizzle(pool), { migrationsFolder: join(here, '..', '..', 'migrations') });
 }, 180_000);
 

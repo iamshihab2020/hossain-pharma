@@ -28,7 +28,7 @@ beforeAll(async () => {
   const ownerPool = new Pool({ connectionString: container.getConnectionUri(), max: 1 });
   const ownerDb = drizzle(ownerPool, { schema });
 
-  await ownerDb.execute(sql`CREATE ROLE hossain_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`);
+  await ownerDb.execute(sql`CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'probe' NOBYPASSRLS`);
   await migrate(drizzle(ownerPool), { migrationsFolder });
 
   await ownerDb
@@ -69,9 +69,9 @@ beforeAll(async () => {
   ]);
   await ownerPool.end();
 
-  // The APPLICATION connects as hossain_app, which cannot bypass RLS.
+  // The APPLICATION connects as nexmarket_app, which cannot bypass RLS.
   const uri = new URL(container.getConnectionUri());
-  uri.username = 'hossain_app';
+  uri.username = 'nexmarket_app';
   uri.password = 'probe';
   appUri = uri.toString();
   appPool = new Pool({ connectionString: appUri, max: 5 });

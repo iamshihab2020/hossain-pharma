@@ -7,7 +7,7 @@ import type { Config } from 'tailwindcss';
  * forces a dependency on every consumer.
  *
  * Colours resolve through `hsl(var(--token))` and pair with
- * `@hossain/config/tailwind/globals.css`. Both files travel together or neither
+ * `@nexmarket/config/tailwind/globals.css`. Both files travel together or neither
  * works: a token here with no matching CSS variable renders as a broken colour
  * at runtime and is invisible to type-check.
  */
