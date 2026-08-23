@@ -11,7 +11,11 @@ import type { Config } from 'tailwindcss';
  * works: a token here with no matching CSS variable renders as a broken colour
  * at runtime and is invisible to type-check.
  */
-const preset = {
+// Annotated rather than `satisfies`. Tailwind types darkMode as
+// Partial<DarkModeConfig>, whose tuple members only match when the array
+// literal is CONTEXTUALLY typed; `satisfies` infers string[] first and fails.
+// Partial<Omit<...>> keeps `content` excluded while leaving the rest optional.
+const preset: Partial<Omit<Config, 'content'>> = {
   darkMode: ['class'],
   theme: {
     extend: {
@@ -97,6 +101,6 @@ const preset = {
       },
     },
   },
-} satisfies Omit<Config, 'content'>;
+};
 
 export default preset;

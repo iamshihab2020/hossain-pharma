@@ -2,7 +2,11 @@
   "name": "@nexmarket/config",
   "version": "0.0.0",
   "private": true,
-  "files": ["tsconfig", "eslint", "tailwind"],
+  "files": [
+    "tsconfig",
+    "eslint",
+    "tailwind"
+  ],
   "exports": {
     "./tsconfig/base.json": "./tsconfig/base.json",
     "./tsconfig/node.json": "./tsconfig/node.json",
@@ -14,5 +18,9 @@
   "scripts": {
     "lint": "echo 'no lint for config package'",
     "type-check": "echo 'no type-check for config package'"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17",
+    "typescript": "^5.9.3"
   }
 }
