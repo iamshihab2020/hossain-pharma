@@ -1,4 +1,4 @@
-import { char, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { char, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { countries, currencies } from './reference.js';
 
 /**
@@ -34,6 +34,11 @@ export const organisations = pgTable('organisations', {
   defaultCurrency: char('default_currency', { length: 3 })
     .notNull()
     .references(() => currencies.code),
+  /**
+   * A negotiated per-seller rate, overriding the category and platform rates
+   * (PRD 9.3). NULL means "inherit", which is the case for every seeded org.
+   */
+  commissionBps: integer('commission_bps'),
   /** Retained by the ETL so a migrated row can be traced back to its Mongo original. */
   legacyMongoId: text('legacy_mongo_id'),
   /**

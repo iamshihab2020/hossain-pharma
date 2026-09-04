@@ -78,6 +78,20 @@
       "when": 1788521974666,
       "tag": "0010_search_index",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788538372913,
+      "tag": "0011_commerce_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788538392618,
+      "tag": "0012_commerce_rls",
+      "breakpoints": true
     }
   ]
 }

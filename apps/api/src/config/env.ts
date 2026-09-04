@@ -48,6 +48,17 @@ const schema = z.object({
    * concatenated onto an endpoint.
    */
   FILE_STORAGE_DIR: z.string().default('.nexmarket/uploads'),
+
+  // --- Payments (PRD 10.1) --------------------------------------------------
+  /**
+   * The shared secret a payment gateway signs its webhooks with.
+   *
+   * A default exists so the suite and a fresh clone run without configuration,
+   * and it is 32 bytes for the same reason the JWT secrets are: this signature
+   * is the ONLY thing standing between an anonymous POST and a ledger entry
+   * saying a buyer paid. In production it is per-provider and rotated.
+   */
+  PAYMENT_WEBHOOK_SECRET: z.string().min(32).default('nexmarket-dev-webhook-secret-change-me'),
 });
 
 export type ApiEnv = z.infer<typeof schema>;

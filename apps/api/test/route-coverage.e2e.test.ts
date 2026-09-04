@@ -47,12 +47,9 @@ const registered: { method: string; url: string }[] = [];
  *   the database, by the `public_active_offers` policy in migration 0008, not
  *   by these handlers.
  */
-const PUBLIC: ReadonlySet<string> = new Set([
+const PUBLIC_READS: ReadonlySet<string> = new Set([
   'GET /health',
-  'POST /auth/register',
-  'POST /auth/login',
-  'POST /auth/refresh',
-  'POST /auth/logout',
+  'GET /cart',
   'GET /auth/google',
   'GET /auth/google/callback',
   'GET /categories',
@@ -62,6 +59,57 @@ const PUBLIC: ReadonlySet<string> = new Set([
   'GET /search',
   'GET /search/suggest',
 ]);
+
+/**
+ * PUBLIC ROUTES THAT WRITE, each with the reason it must, and they are kept
+ * apart from the reads on purpose.
+ *
+ * A public read exposes data the database has already decided is public. A
+ * public WRITE lets an anonymous caller change server state, which is a
+ * different risk class entirely - and an allowlist that mixed the two would let
+ * the next one arrive looking like all the entries above it.
+ *
+ * Phase 4 added the first of these. The test below fails if a public write has
+ * no justification, so adding one is a decision somebody wrote down.
+ */
+const PUBLIC_WRITES: ReadonlyMap<string, string> = new Map([
+  [
+    'POST /auth/register',
+    'There is no caller identity yet; creating one is the point.',
+  ],
+  ['POST /auth/login', 'Same: the caller has no token until this succeeds.'],
+  [
+    'POST /auth/refresh',
+    'The caller presents a refresh COOKIE, not a bearer token. Requiring an access token would defeat refreshing after one expires.',
+  ],
+  [
+    'POST /auth/logout',
+    'Must work with an EXPIRED access token, or a stale tab can never sign out.',
+  ],
+  [
+    'POST /cart/items',
+    'PRD 9.1 requires a guest cart. Requiring sign-in before browsing-to-basket is the single biggest drop-off in a storefront. A guest cart holds listing ids and quantities, carries no money, and cannot place an order - checkout is authenticated.',
+  ],
+  [
+    'PATCH /cart/items/:id',
+    'Same guest cart. Scoped to a cart resolved from the caller cookie, so it cannot reach another shopper basket.',
+  ],
+  [
+    'DELETE /cart/items/:id',
+    'Same guest cart. Removing a line is scoped to the cart resolved from the caller cookie, so an anonymous caller can only empty their own basket.',
+  ],
+  [
+    'POST /cart/merge',
+    'Called on login to fold a guest cart into the member one. It answers 401 without a token; it is public only so the route exists before the guard would refuse the cookie-only case.',
+  ],
+  [
+    'POST /webhooks/payment/:provider',
+    'A payment gateway holds no NexMarket session. The HMAC over the raw body IS the authentication, checked in constant time inside the adapter, and a unique constraint on (provider, provider_event_id) makes a replay a no-op.',
+  ],
+]);
+
+/** Both halves, for the reachability check that does not care which is which. */
+const PUBLIC: ReadonlySet<string> = new Set([...PUBLIC_READS, ...PUBLIC_WRITES.keys()]);
 
 /** HEAD and OPTIONS are synthesised by Fastify, not authored here. */
 const PROBED_METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
@@ -122,6 +170,19 @@ describe('route coverage', () => {
       if (!refusedByGuard(res)) reachable.push(`${key} -> ${res.statusCode} ${res.body}`);
     }
     expect(reachable).toEqual([]);
+  });
+
+  it('justifies every public route that WRITES', () => {
+    // Phase 4's audit finding F-5. Before it, the allowlist was 13 reads and
+    // one shape; a public mutation would have been indistinguishable from them.
+    for (const [route, reason] of PUBLIC_WRITES) {
+      expect(reason.length, `${route} needs a written justification`).toBeGreaterThan(40);
+    }
+
+    // Nothing that mutates may sit in the reads list, where it would inherit
+    // "it is only a read" as its unexamined justification.
+    const mutatingReads = [...PUBLIC_READS].filter((route) => !route.startsWith('GET '));
+    expect(mutatingReads).toEqual([]);
   });
 
   it('has no stale entry in the public allowlist', () => {

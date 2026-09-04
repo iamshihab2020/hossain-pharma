@@ -3,6 +3,9 @@
 One record per decision that would otherwise have to be re-derived from the code.
 Each states the context, the decision, and what it costs.
 
+For the system these decisions add up to — the diagrams, the flows and the
+invariants in one place — see [`../SYSTEM-DESIGN.md`](../SYSTEM-DESIGN.md).
+
 | # | Decision | Phase |
 |---|---|---|
 | [0001](./0001-monorepo-and-stack.md) | Monorepo layout and stack, with resolved versions and why TypeScript is pinned | 0 |
@@ -20,6 +23,9 @@ Each states the context, the decision, and what it costs.
 | [0013](./0013-capability-matrix-as-data.md) | The capability matrix is data, and guards never read role names | 1 |
 | [0014](./0014-products-listings-and-the-buy-box.md) | **Products, listings, and the buy box** | 2 |
 | [0015](./0015-search-materialisation-and-ranking.md) | Search: one materialisation, one predicate, and what the numbers cost | 3 |
+| [0016](./0016-the-ledger-and-its-constraint-trigger.md) | **The ledger: signed entries, a deferred trigger, and why it is platform-owned** | 4 |
+| [0017](./0017-orders-and-the-buyer-policy.md) | Orders: the buyer policy, the third tenant-scope escape, and price tampering | 4 |
+| [0018](./0018-payment-port-and-webhook-idempotency.md) | The payment port, cash on delivery, and why Stripe is not here yet | 4 |
 
 **Read 0003 first.** It covers the three separate ways tenant isolation can be
 reduced to decoration, each of which fails silently, and where each is checked.

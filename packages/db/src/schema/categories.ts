@@ -3,6 +3,7 @@ import {
   boolean,
   customType,
   index,
+  integer,
   pgEnum,
   pgTable,
   text,
@@ -55,6 +56,13 @@ export const categories = pgTable(
      */
     isPerishable: boolean('is_perishable').notNull().default(false),
     isRestricted: boolean('is_restricted').notNull().default(false),
+    /**
+     * PRD 9.3 commission configuration, resolving open question Q3 with its
+     * own default: per-category with a platform default. NULL means "inherit".
+     * Basis points, never percent - 2.5% is not an integer percentage and a
+     * float in a money path is the bug @nexmarket/shared exists to prevent.
+     */
+    commissionBps: integer('commission_bps'),
     position: text('position'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

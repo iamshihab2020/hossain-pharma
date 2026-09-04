@@ -2,8 +2,8 @@ import { sql } from 'drizzle-orm';
 import type { Transaction } from '@nexmarket/db';
 
 /**
- * The two places the tenant GUC is moved outside `withTenant`, and the only
- * two.
+ * The three places the tenant GUC is moved outside `withTenant`, and the only
+ * three.
  *
  * Both are transaction-local (`set_config(..., true)`), both restore in a
  * `finally`, and both wrap the smallest possible amount of work. Nothing here
@@ -16,7 +16,16 @@ import type { Transaction } from '@nexmarket/db';
  *  - founding an organisation, which must write the first membership row for a
  *    tenant that did not exist when the request began;
  *  - reindexing a product for search, which is a CROSS-TENANT aggregate over
- *    every seller's public offers.
+ *    every seller's public offers;
+ *  - placing an order at checkout, where a BUYER - who is not a tenant - writes
+ *    to four tenant-owned tables across several sellers in one transaction.
+ *
+ * The third was added in Phase 4 after the two alternatives were rejected in
+ * writing (ADR 0017): running the whole checkout as a platform admin hands a
+ * buyer's transaction every tenant's rows to solve a narrow write problem, and
+ * a buyer-insert policy on `orders` would let a buyer forge an order attributed
+ * to themselves against any seller - an order row is what a seller's fulfilment
+ * queue reads.
  *
  * IF YOU ARE ADDING A THIRD, STOP. The question to answer first is whether the
  * work is genuinely not tenant-scoped, or whether it is tenant-scoped work
@@ -47,10 +56,14 @@ export async function withoutTenantScope<T>(tx: Transaction, fn: () => Promise<T
 /**
  * Runs `fn` as `tenantId`, then restores whatever was set.
  *
- * Safe only when `tenantId` is a value THIS transaction produced - founding an
- * organisation is the one case. Never pass a caller-supplied id: that is
- * exactly the authorisation check the interceptor exists to perform, and doing
- * it here would move it somewhere nobody looks.
+ * Safe only when `tenantId` is a value THIS transaction produced. Two cases:
+ * founding an organisation, and checkout - where the seller id comes from
+ * `listings.tenant_id`, read from the database inside the transaction, because
+ * the buyer chose a LISTING and never a tenant.
+ *
+ * Never pass a caller-supplied id: that is exactly the authorisation check the
+ * interceptor exists to perform, and doing it here would move it somewhere
+ * nobody looks.
  */
 export async function asTenantScope<T>(
   tx: Transaction,

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository directory is still `hossain-pharma` and the git history begins as a pharmacy project. That is historical. **Pharmacy is not a vertical here** and prescription medicine is explicitly out of scope — do not reintroduce health framing into naming, seed data, or copy. Names inside `archive/` are left alone on purpose.
 
-Work is organised into 13 phases. **Phases 0-3 are complete; Phases 4-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec and `docs/architecture/` holds the decision records. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
+Work is organised into 13 phases. **Phases 0-4 are complete; Phases 5-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
 
 ## Commands
 
@@ -71,7 +71,14 @@ and that is a decision rather than an omission (there is a test asserting it). S
 whole catalogue — `categories`, `products`, `product_variants`, `product_media`,
 `product_attributes` — because a catalogue entry shared by competing sellers is the point
 of PRD 8.3. The tenant-owned tables are `org_members`, `seller_documents`, `listings`,
-`inventory_items`, `warehouses` and the `rls_probe` canary. `search_documents`,
+`inventory_items`, `warehouses`, `orders`, `order_items` and the `rls_probe`
+canary. The Phase 4 commerce tables split three ways and each way is a decision:
+`carts`, `cart_items` and `addresses` are platform-owned and user-scoped in the
+service (a cart spans sellers by definition); `ledger_accounts`,
+`ledger_entries`, `transactions`, `payment_intents` and `payment_events` are
+platform-owned and ORG-scoped in the service, because one capture posts against
+two sellers and the platform in a single transaction and no tenant GUC can
+express that (ADR 0016). `search_documents`,
 `recently_viewed` and `saved_searches` are platform-owned too - the first describes
 already-public products, the other two are scoped by `user_id` in the service, which is
 then the ONLY boundary and is tested as one.
@@ -109,9 +116,9 @@ Consequences for anything you write:
   as well. It has no `WITH CHECK`, deliberately - that is what stops a user granting
   themselves a membership.
 - **A second permissive policy on a tenant-owned table widens every tenant-scoped read.**
-  Postgres ORs them. This has now bitten twice - `own_membership` on `org_members`
-  (migration 0006) and `public_active_offers` on `listings` (0008) - and both fixes are
-  the same: gate the extra policy on
+  Postgres ORs them. This has now bitten three times - `own_membership` on `org_members`
+  (migration 0006), `public_active_offers` on `listings` (0008) and `own_orders` on
+  `orders` (0012) - and every fix is the same: gate the extra policy on
   `NULLIF(current_setting('app.tenant_id', true), '') IS NULL`, so it applies only while
   no tenant is selected. Assume any new policy has this bug until a test says otherwise.
 - **The seed writes `org_members` through `withTenant`.** The seed connects as
@@ -136,14 +143,21 @@ new controller with no decorators is closed and tenant-scoped. Opting out is `@P
   and a caller typo becomes a 500.
 - Capabilities are declared with `@RequireCapability('member:write')`. **Never read a
   role name.** ADR 0013.
-- **Two places move `app.tenant_id` outside `withTenant`**, both in
-  `common/tenant-scope.ts`: founding an organisation, and reindexing search (a
-  cross-tenant aggregate). Both are transaction-local and restore in a `finally`. Before
-  adding a third, ask whether the work is genuinely not tenant-scoped or is tenant-scoped
-  work being done from the wrong place - it has been the second more often.
+- **Three places move `app.tenant_id` outside `withTenant`**, all in
+  `common/tenant-scope.ts`: founding an organisation, reindexing search (a cross-tenant
+  aggregate), and placing an order at checkout (a buyer writing to four tenant-owned
+  tables across several sellers). All are transaction-local and restore in a `finally`.
+  Before adding a fourth, ask whether the work is genuinely not tenant-scoped or is
+  tenant-scoped work being done from the wrong place - it has been the second more often,
+  and Phase 4 rejected a fourth on exactly those grounds: the ledger looked like it needed
+  one and turned out to be platform-owned instead (ADR 0016).
 - **A write that changes what a buyer would FIND must reindex.** `SearchIndexService` is
-  the only writer of `search_documents`; the hooks live in the listings, catalogue-admin
-  and org-governance services. Suspending a seller is the least obvious one. The drift
+  the only writer of `search_documents`; the hooks live in the listings, catalogue-admin,
+  org-governance and checkout services. Suspending a seller is the least obvious one and
+  **placing an order** is the second - buying the last unit flips `in_stock`. Checkout must
+  also call `ListingsService.recomputeAvailableStock` rather than writing
+  `listings.available_stock` itself: that column has one documented writer, and a
+  denormalised column with two writers drifts under concurrency. The drift
   test in `search.e2e` compares the table to its source view and is what makes that list
   verifiable rather than a claim.
 
@@ -164,12 +178,33 @@ file, journal entry and snapshot together.
 Changing an already-applied migration's contents changes its hash and requires
 recreating the database.
 
+### The ledger and payments (Phase 4)
+
+- **`ledger_entries` is append-only, and the `REVOKE` is what makes it so.** Migration
+  0001 ran `ALTER DEFAULT PRIVILEGES ... GRANT SELECT, INSERT, UPDATE, DELETE`, so every
+  new table already carries all four. A narrower `GRANT` is purely additive: it reads
+  like a restriction and removes nothing. This was verified against the live database
+  after the first version of migration 0012 did exactly that.
+- **`ON CONFLICT DO UPDATE` needs the UPDATE privilege**, which collides with the revoke.
+  Use `DO NOTHING` then `SELECT`; it is still race-safe.
+- **The webhook is the only writer of `payment_intents.status`.** Checkout creates an
+  intent and never advances it. The port types `initialStatus` so no adapter can return a
+  settled status.
+- **Idempotency is a unique constraint, never a prior lookup.** Two concurrent deliveries
+  of one gateway retry would both pass a `SELECT`; insert first and read the row count.
+- **A conditional UPDATE must repeat its predicate OUTSIDE the subquery.** Postgres
+  evaluates a subquery against the pre-lock snapshot and re-checks only the outer `WHERE`
+  after the lock, so the first version of the stock reservation let two checkouts take the
+  last unit. `FOR UPDATE` inside plus the predicate outside; both halves are load-bearing.
+
 ### Money
 
 `type Money = { amount: number; currency: string }` where `amount` is **integer minor
 units**. No floats in any pricing, tax, discount, shipping or ledger path. Use the
-helpers in `@nexmarket/shared` — `allocate()` in particular splits one payment across
-sellers without losing a unit, which the Phase 4 ledger depends on.
+helpers in `@nexmarket/shared`. `allocate()` splits one amount across sellers without
+losing a unit — it is **not** used yet: per-seller subtotals and percentage commission sum
+exactly by construction. It earns its place at the first cart-level amount that gets
+split, which is a promotion (Phase 9) or a partial refund (Phase 8).
 
 The legacy server did `parseInt(price * 100)`, which truncates. That bug is what this
 module exists to make unrepresentable.

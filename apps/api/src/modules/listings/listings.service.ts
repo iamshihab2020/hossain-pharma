@@ -239,8 +239,14 @@ export class ListingsService {
    * It runs in the SAME transaction as the inventory write it summarises, so
    * the two cannot diverge across a failure. A seed test and an API test both
    * assert they agree.
+   *
+   * PUBLIC since Phase 4, because checkout reserves stock and must refresh this
+   * column too. It calls THIS method rather than issuing its own UPDATE: a
+   * denormalised column with two writers drifts under concurrency, and the
+   * drift is invisible until a buy box advertises stock that is not there.
+   * The caller must already hold the owning tenant's scope.
    */
-  private async recomputeAvailableStock(tx: Transaction, listingId: string): Promise<void> {
+  async recomputeAvailableStock(tx: Transaction, listingId: string): Promise<void> {
     await tx.execute(sql`
       UPDATE listings SET available_stock = COALESCE((
         SELECT sum(on_hand - reserved)::int FROM inventory_items WHERE listing_id = ${listingId}

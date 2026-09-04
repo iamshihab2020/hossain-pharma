@@ -7,7 +7,7 @@ Any verified seller lists anything. Buyers search across all of them, compare co
 
 ---
 
-## Status: Phases 0-3 complete, Phase 4 not started
+## Status: Phases 0-4 complete, Phase 5 not started
 
 **What runs today:** a monorepo, a database with tenant isolation proven under concurrent load at both the query layer and over HTTP, an idempotent seed, and three applications that build and start — plus the whole of identity and tenancy. Registration and login (argon2id), refresh-token rotation with reuse detection, Google OAuth, a capability matrix, a globally-registered auth guard and tenant interceptor, seller onboarding with document upload, and a cursor-paginated admin approval queue.
 
@@ -15,13 +15,16 @@ Phase 2 added the catalogue: a three-level category tree, shared **products** wi
 
 Phase 3 added discovery: a materialised search index, weighted full-text search with `pg_trgm` typo tolerance, faceted filtering whose counts match the filtered results exactly, per-category dynamic facets, autocomplete, similar products, recently viewed and saved searches.
 
-**What does not exist yet:** cart, orders, ledger, logistics. Those are Phases 4 through 6. `packages/api-client` is still not generated — there is an API surface worth generating from, and it has not fitted into a phase yet.
+Phase 4 added commerce: a server-authoritative cart spanning many sellers with a guest cart that merges on login, an address book, a quote pipeline behind a `ShippingQuoteProvider` port, an age gate for restricted categories, a `PaymentProvider` port with **mock and cash-on-delivery** adapters, and a **double-entry ledger** whose balance invariant is enforced three times over.
+
+**What does not exist yet:** fulfilment and shipments, logistics and zones, reviews, returns. Those are Phases 5 through 8. `packages/api-client` is still not generated — there is an API surface worth generating from, and it has not fitted into a phase yet.
 
 This section is kept accurate deliberately. A README that overstates what is built is the specific failure this project is a reaction to — see [`OVERVIEW.md`](./OVERVIEW.md), where all three of the previous READMEs described software that did not exist.
 
 | | Document | What it is |
 |---|---|---|
 | 📋 | **[`docs/PRD-marketplace-migration.md`](./docs/PRD-marketplace-migration.md)** | The product spec — architecture, data model, features by role, 13-phase roadmap |
+| 🗺️ | **[`docs/SYSTEM-DESIGN.md`](./docs/SYSTEM-DESIGN.md)** | The system as built — 15 diagrams covering the request pipeline, tenancy, the data model, the lifecycles, the buy box and search |
 | 🧭 | **[`docs/architecture/`](./docs/architecture/README.md)** | Decision records. **Start with 0003** |
 | 🔍 | **[`OVERVIEW.md`](./OVERVIEW.md)** | Audit of the legacy system, and why it is being replaced rather than repaired |
 
@@ -60,7 +63,7 @@ Seeded demo accounts all use the password `nexmarket-demo`: `admin@nexmarket.tes
 pnpm lint && pnpm type-check && pnpm test && pnpm build
 ```
 
-**286 tests** — api 143 · db 71 · shared 50 · mongo-etl 19 · worker 3 — plus a **4-test search benchmark** run separately by `pnpm --filter @nexmarket/api perf`, because a benchmark sharing a database with a parallel functional suite measures the contention rather than the query. The suite needs Docker but no database configuration: every suite that touches a database starts its own via Testcontainers. Verified by running it with `DATABASE_URL`, `DATABASE_MIGRATION_URL` and `REDIS_URL` all unset.
+**381 tests** — api 180 · db 95 · shared 84 · mongo-etl 19 · worker 3 — plus a **4-test search benchmark** run separately by `pnpm --filter @nexmarket/api perf`, because a benchmark sharing a database with a parallel functional suite measures the contention rather than the query. The suite needs Docker but no database configuration: every suite that touches a database starts its own via Testcontainers. Verified by running it with `DATABASE_URL`, `DATABASE_MIGRATION_URL` and `REDIS_URL` all unset.
 
 ---
 
@@ -106,6 +109,13 @@ All three are closed, and the closure is tested rather than asserted:
 | `_journal.json` lists exactly the migration files on disk | `migrations.test.ts` — Drizzle silently ignores unlisted ones |
 | One seller's tenant-scoped read is not widened by the public offers policy | `catalogue-rls.test.ts` — the trap that ORed permissive policies set twice |
 | Seller A cannot read or edit seller B's listing, and B's row is unchanged after the attempt | `listings.e2e.test.ts` |
+| A cart spanning 3 sellers produces 3 orders under one payment | `checkout.e2e.test.ts` |
+| A tampered total leaves **zero orders and zero ledger entries**, not merely an error | `checkout.e2e.test.ts` |
+| The intent is still `REQUIRES_PAYMENT` after a successful confirm — only the webhook settles it | `checkout.e2e.test.ts` |
+| The same webhook delivered twice captures once | `checkout.e2e.test.ts` — counted, not assumed |
+| Exactly one of two concurrent checkouts takes the last unit | `checkout.e2e.test.ts` |
+| An unbalanced ledger write fails at **COMMIT**, and `UPDATE`/`DELETE` are refused outright | `ledger-constraints.test.ts` |
+| `cart_items` has no money column at all | `cart.e2e.test.ts` — asserted against the schema, not the response |
 | The search index agrees with the view it is built from, after every write path | `search.e2e.test.ts` — the check that makes the reindex hooks verifiable |
 | Facet counts equal what filtering by them returns, for every value of every facet | `search.e2e.test.ts` — asserted in a loop, not spot-checked |
 | One user cannot read or delete another's saved searches | `search.e2e.test.ts` — there is no policy behind that table, so the filter is the boundary |
@@ -116,6 +126,12 @@ All three are closed, and the closure is tested rather than asserted:
 ---
 
 ## Architecture
+
+The diagram below is the shape. [`docs/SYSTEM-DESIGN.md`](./docs/SYSTEM-DESIGN.md)
+is the full design: the request pipeline as a sequence, how a new table is
+classified tenant- or platform-owned, the ERD, both state machines, the buy-box
+ranking, the search write and query paths, and a table of every invariant with
+the test that proves it.
 
 ```mermaid
 graph TB
@@ -185,7 +201,7 @@ Each app and package carries its own README describing its layout and convention
 | ☑ | **1 · Tenancy & Identity** | Orgs, membership, RBAC, **RLS interceptor**, auth, seller onboarding |
 | ☑ | **2 · Catalogue** | Categories, products, variants, **listings**, inventory, buy box |
 | ☑ | **3 · Discovery** | FTS, facets, autocomplete, browse, recommendations |
-| ☐ | **4 · Cart, Checkout & Ledger** | Multi-seller cart, pricing engine, `PaymentProvider` port, **double-entry ledger** |
+| ☑ | **4 · Cart, Checkout & Ledger** | Multi-seller cart, pricing engine, `PaymentProvider` port, **double-entry ledger** |
 | ☐ | **5 · Orders & Fulfilment** | Order state machine, per-seller queues, shipments, tracking |
 | ☐ | **6 · Logistics & Delivery** | Warehouses, zones, rate cards, slots, **COD reconciliation**, reverse pickup |
 | ☐ | **7 · Trust** | Verified reviews, Q&A, seller ratings, moderation |
@@ -198,6 +214,8 @@ Each app and package carries its own README describing its layout and convention
 Each phase has acceptance criteria in PRD §11 and gets its own spec → plan → implement cycle. **A phase is not ticked here until its criteria pass in CI.**
 
 Phase 0 deferred two things deliberately. The `TenantInterceptor` (PRD §6.4 criterion 1) is now built and globally registered — that was Phase 1's headline deliverable. The ETL's load stage still cannot insert into tables Phase 4 has not created.
+
+Phase 4 leaves **one PRD item deliberately unbuilt**: the PRD names three payment adapters and two ship — `mock` and cash on delivery. A Stripe adapter built against an account that does not exist is code no test can exercise and a README claim nobody can check, which is the specific failure this repository reacts to. The port is the seam; adding it is one class and one line. Recorded in [ADR 0018](./docs/architecture/0018-payment-port-and-webhook-idempotency.md) as a deviation, not as done. Also deliberately thin, with the phase that owns them named: shipping is a flat rate and tax one rate per country (Phase 6), and cash on delivery accrues to `COD_RECEIVABLE` but is never collected (Phase 6).
 
 Phase 3 leaves one criterion **open, not done**: PRD §11 asks for **p95 < 300 ms on 50k products**, and this repository does not prove that number. Every query shape's median at 50k documents is 7–120 ms and its best case 4–108 ms, but the harness — a Docker-hosted Postgres sharing a machine with the rest of the suite — delivers 400–1100 ms stalls to queries whose best case is single-digit milliseconds. The perf suite therefore asserts the best case per shape, separately asserts the GIN indexes are used, and reports the full distribution on every run. The strict p95 needs a staging environment with dedicated hardware. Also absent, and for stated reasons: **"frequently bought together"** and a **best-selling sort** need order history (Phase 4), and **saved-search alerts** need notifications (Phase 9) — the searches are saved, nothing emails anyone.
 
@@ -219,6 +237,9 @@ Phase 1 leaves three things stated rather than hidden. **"A suspended seller can
 | **Postgres FTS over Typesense** | One-command spin-up matters more than the ceiling. A `SearchProvider` port documents the upgrade path. |
 | **Ledger from the first order** | Retrofitting double-entry onto existing orders is the most expensive mistake available here |
 | **`ts_rank`, not `ts_rank_cd`** | Cover density costs 1294 ms against 50k documents where `ts_rank` costs 246 ms, and rewards term proximity that barely exists in a four-word product name — [0015](./docs/architecture/0015-search-materialisation-and-ranking.md) |
+| **Ledger entries are signed, debit positive** | So the balance rule is literally `SUM(amount) = 0`; a `direction` enum turns every check into a `CASE`, and every place that forgets it produces a wrong number that still looks like a number — [0016](./docs/architecture/0016-the-ledger-and-its-constraint-trigger.md) |
+| **The ledger is platform-owned** | One capture posts against two sellers **and** the platform in one transaction, which no tenant GUC can express. It is the platform's books, not a seller's data — [0016](./docs/architecture/0016-the-ledger-and-its-constraint-trigger.md) |
+| **The webhook is the only writer of payment status** | The port types `initialStatus` so no adapter *can* return a settled status; the rule is a type error rather than a code review — [0018](./docs/architecture/0018-payment-port-and-webhook-idempotency.md) |
 | **Products shared, listings tenant-owned** | The legacy schema had `products.email` — one row per seller — which makes cross-seller comparison impossible and leaves no buy box to build — [0014](./docs/architecture/0014-products-listings-and-the-buy-box.md) |
 | **Capabilities, never role names** | `@RequireCapability('member:write')` survives adding a sub-role; `role === 'OWNER'` does not — [0013](./docs/architecture/0013-capability-matrix-as-data.md) |
 | **Refresh tokens as families** | One row per token cannot express reuse detection: once the old hash is overwritten, a stolen token and an unknown one are indistinguishable — [0012](./docs/architecture/0012-refresh-token-families.md) |
