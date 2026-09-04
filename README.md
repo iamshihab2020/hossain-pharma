@@ -7,11 +7,15 @@ Any verified seller lists anything. Buyers search across all of them, compare co
 
 ---
 
-## Status: Phase 0 complete, Phase 1 not started
+## Status: Phases 0-3 complete, Phase 4 not started
 
-**What runs today** is the foundation: a monorepo, a database with tenant isolation proven under concurrent load, an idempotent seed, and three applications that build and start.
+**What runs today:** a monorepo, a database with tenant isolation proven under concurrent load at both the query layer and over HTTP, an idempotent seed, and three applications that build and start — plus the whole of identity and tenancy. Registration and login (argon2id), refresh-token rotation with reuse detection, Google OAuth, a capability matrix, a globally-registered auth guard and tenant interceptor, seller onboarding with document upload, and a cursor-paginated admin approval queue.
 
-**What does not exist yet:** authentication, users, sellers beyond eight seed rows, catalogue, search, cart, orders, ledger, logistics. Those are Phases 1 through 6.
+Phase 2 added the catalogue: a three-level category tree, shared **products** with variants and per-category attributes, tenant-owned **listings**, per-warehouse inventory, seller listing CRUD, admin product moderation, and the **buy box** — two sellers on one product page, ranked on landed price.
+
+Phase 3 added discovery: a materialised search index, weighted full-text search with `pg_trgm` typo tolerance, faceted filtering whose counts match the filtered results exactly, per-category dynamic facets, autocomplete, similar products, recently viewed and saved searches.
+
+**What does not exist yet:** cart, orders, ledger, logistics. Those are Phases 4 through 6. `packages/api-client` is still not generated — there is an API surface worth generating from, and it has not fitted into a phase yet.
 
 This section is kept accurate deliberately. A README that overstates what is built is the specific failure this project is a reaction to — see [`OVERVIEW.md`](./OVERVIEW.md), where all three of the previous READMEs described software that did not exist.
 
@@ -32,7 +36,7 @@ cp .env.example .env
 pnpm install
 docker compose up -d      # Postgres on 5433, Redis on 6380
 pnpm db:push              # migrations, including RLS policies and grants
-pnpm seed                 # 5 countries, 5 currencies, 8 seller organisations
+pnpm seed                 # 8 seller orgs, 5 users, 11 categories, 3 products, 4 listings
 pnpm dev                  # api :4000 · web :3000 · worker
 ```
 
@@ -40,7 +44,11 @@ Then:
 
 - <http://localhost:3000> — the web app
 - <http://localhost:4000/health> — `{"status":"ok","database":"ok"}`
-- <http://localhost:4000/docs> — Swagger UI
+- <http://localhost:4000/docs> — Swagger UI, and every registered route appears in it (asserted by a test)
+
+Seeded demo accounts all use the password `nexmarket-demo`: `admin@nexmarket.test`
+(platform admin), `karim@acme.test` (OWNER of two organisations and STAFF in a third),
+`nadia@acme.test`, `tanvir@acme.test`, and `rina@buyer.test` (a buyer, member of nothing).
 
 **Ports are 5433 and 6380, not the defaults**, so this runs alongside other projects that already bind 5432/6379. See [ADR 0004](./docs/architecture/0004-local-docker-vs-neon.md).
 
@@ -52,7 +60,7 @@ Then:
 pnpm lint && pnpm type-check && pnpm test && pnpm build
 ```
 
-**71 tests.** The suite needs Docker but no database configuration: every suite that touches a database starts its own via Testcontainers. Verified by running it with `DATABASE_URL`, `DATABASE_MIGRATION_URL` and `REDIS_URL` all unset.
+**286 tests** — api 143 · db 71 · shared 50 · mongo-etl 19 · worker 3 — plus a **4-test search benchmark** run separately by `pnpm --filter @nexmarket/api perf`, because a benchmark sharing a database with a parallel functional suite measures the contention rather than the query. The suite needs Docker but no database configuration: every suite that touches a database starts its own via Testcontainers. Verified by running it with `DATABASE_URL`, `DATABASE_MIGRATION_URL` and `REDIS_URL` all unset.
 
 ---
 
@@ -87,13 +95,23 @@ All three are closed, and the closure is tested rather than asserted:
 | Check | Where |
 |---|---|
 | Connecting role has `rolsuper=f, rolbypassrls=f` | first test in the suite, and again in CI |
-| Missing tenant context returns **zero** rows, never all rows | `tenant-context.test.ts` |
+| Missing tenant context returns **zero** rows, never all rows | `tenant-context.test.ts`, `membership-rls.test.ts` |
 | 40 interleaved requests, two tenants, one 5-connection pool, zero cross-reads | `tenant-context.test.ts` |
+| 40 interleaved **HTTP** requests, two tenants, through the guard, the interceptor and the pool | `tenancy.e2e.test.ts` — ten consecutive runs, no flake |
 | Context does not survive its transaction on a reused connection | `max:1` pool, asserted directly |
-| Cross-tenant write refused with SQLSTATE `42501`, leaving no trace | `tenant-context.test.ts` |
-| Raw `db`/`pool` import banned outside `packages/db` | eslint, verified by running it against a violating file |
+| Cross-tenant write refused with SQLSTATE `42501`, leaving no trace | `tenant-context.test.ts`, `membership-rls.test.ts` |
+| `relforcerowsecurity` true on every tenant-owned table, false on the platform-owned ones | `membership-rls.test.ts`, read from `pg_class` |
+| No route is both non-public and reachable without a token | `route-coverage.e2e.test.ts` — reflection over the router, not a hand-kept list |
+| Every registered route appears in the OpenAPI document | `route-coverage.e2e.test.ts` |
+| `_journal.json` lists exactly the migration files on disk | `migrations.test.ts` — Drizzle silently ignores unlisted ones |
+| One seller's tenant-scoped read is not widened by the public offers policy | `catalogue-rls.test.ts` — the trap that ORed permissive policies set twice |
+| Seller A cannot read or edit seller B's listing, and B's row is unchanged after the attempt | `listings.e2e.test.ts` |
+| The search index agrees with the view it is built from, after every write path | `search.e2e.test.ts` — the check that makes the reindex hooks verifiable |
+| Facet counts equal what filtering by them returns, for every value of every facet | `search.e2e.test.ts` — asserted in a loop, not spot-checked |
+| One user cannot read or delete another's saved searches | `search.e2e.test.ts` — there is no policy behind that table, so the filter is the boundary |
+| Raw `db`/`pool` import banned outside `packages/db` | eslint, seen to fail against a violating file and then reverted |
 
-100% coverage on `tenant-context.ts`, `assert-driver.ts`, and `money.ts`.
+100% coverage — statements, branches, functions and lines — on `tenant-context.ts`, `assert-driver.ts`, `money.ts`, `capabilities.ts` and `buy-box.ts`.
 
 ---
 
@@ -107,8 +125,8 @@ graph TB
         MW["middleware — session + route guards"]
     end
     subgraph API["apps/api — NestJS on Fastify"]
-        G["Guards: Auth · Capability · Tenant"]
-        I["TenantInterceptor → withTenant()"]
+        G["Guards: Auth · Admin — global, deny by default"]
+        I["TenantInterceptor → withTenant() + capabilities"]
         P["Ports: Payment · Shipping · Search · Storage · Mail"]
     end
     W["apps/worker — BullMQ"]
@@ -125,7 +143,7 @@ graph TB
 
 The browser never calls the API directly. Every request originates server-side from a React Server Component or Server Action, so the access token lives in an `httpOnly` cookie and never reaches JavaScript.
 
-Guards, the interceptor, and the ports are Phase 1 onward. Phase 0 built the layer underneath them.
+The guards and the interceptor are built and globally registered as of Phase 1. `FileStorage` is the first port, with a local-filesystem adapter; the payment, shipping, search and mail ports arrive with the phases that need them.
 
 ---
 
@@ -153,7 +171,7 @@ Guards, the interceptor, and the ports are Phase 1 onward. Phase 0 built the lay
 
 Each app and package carries its own README describing its layout and conventions.
 
-`packages/api-client` (generated from OpenAPI) arrives when there is an API surface worth generating from — Phase 1.
+`packages/api-client` (generated from OpenAPI) is still not built. Phase 1 produced the API surface worth generating from; the generator did not fit into it, and saying so is better than listing it as done.
 
 ---
 
@@ -164,9 +182,9 @@ Each app and package carries its own README describing its layout and convention
 | | Phase | Scope |
 |---|---|---|
 | ☑ | **0 · Foundation** | Monorepo, Postgres, Drizzle, CI, Docker, seed harness, Mongo ETL |
-| ☐ | **1 · Tenancy & Identity** | Orgs, membership, RBAC, **RLS interceptor**, auth, seller onboarding |
-| ☐ | **2 · Catalogue** | Categories, products, variants, **listings**, inventory, buy box |
-| ☐ | **3 · Discovery** | FTS, facets, autocomplete, browse, recommendations |
+| ☑ | **1 · Tenancy & Identity** | Orgs, membership, RBAC, **RLS interceptor**, auth, seller onboarding |
+| ☑ | **2 · Catalogue** | Categories, products, variants, **listings**, inventory, buy box |
+| ☑ | **3 · Discovery** | FTS, facets, autocomplete, browse, recommendations |
 | ☐ | **4 · Cart, Checkout & Ledger** | Multi-seller cart, pricing engine, `PaymentProvider` port, **double-entry ledger** |
 | ☐ | **5 · Orders & Fulfilment** | Order state machine, per-seller queues, shipments, tracking |
 | ☐ | **6 · Logistics & Delivery** | Warehouses, zones, rate cards, slots, **COD reconciliation**, reverse pickup |
@@ -179,7 +197,13 @@ Each app and package carries its own README describing its layout and convention
 
 Each phase has acceptance criteria in PRD §11 and gets its own spec → plan → implement cycle. **A phase is not ticked here until its criteria pass in CI.**
 
-Phase 0 deferred two things deliberately, both recorded rather than quietly skipped: the `TenantInterceptor` (PRD §6.4 criterion 1) has no tenant-scoped route to wrap yet, and the ETL's load stage cannot insert into tables Phase 4 has not created.
+Phase 0 deferred two things deliberately. The `TenantInterceptor` (PRD §6.4 criterion 1) is now built and globally registered — that was Phase 1's headline deliverable. The ETL's load stage still cannot insert into tables Phase 4 has not created.
+
+Phase 3 leaves one criterion **open, not done**: PRD §11 asks for **p95 < 300 ms on 50k products**, and this repository does not prove that number. Every query shape's median at 50k documents is 7–120 ms and its best case 4–108 ms, but the harness — a Docker-hosted Postgres sharing a machine with the rest of the suite — delivers 400–1100 ms stalls to queries whose best case is single-digit milliseconds. The perf suite therefore asserts the best case per shape, separately asserts the GIN indexes are used, and reports the full distribution on every run. The strict p95 needs a staging environment with dedicated hardware. Also absent, and for stated reasons: **"frequently bought together"** and a **best-selling sort** need order history (Phase 4), and **saved-search alerts** need notifications (Phase 9) — the searches are saved, nothing emails anyone.
+
+Phase 2 leaves four things stated rather than hidden. **Landed price is flat, not zone-aware** — delivery zones are Phase 6, and the buy-box response carries `basis: "flat-shipping"` so nothing downstream can assume otherwise. **Seller rating is the second ranking key and is inert**, because there are no reviews until Phase 7; it is implemented and tested with synthetic values. **Bulk CSV import, tiered pricing and batch/lot expiry** are PRD §9.2 catalogue items deliberately deferred to Phase 10 or to Phase 6 warehousing. **`reserved` stock is written but never decremented** — reservation happens at checkout, in Phase 4; the column exists so `available = on_hand - reserved` is defined from the start rather than retrofitted.
+
+Phase 1 leaves three things stated rather than hidden. **"A suspended seller can still fulfil open orders" is proven as a mechanism, not an outcome** — there are no orders until Phase 4, and the test name says so. **Document upload is mock KYC**, on a local-filesystem adapter behind a `FileStorage` port; PRD §4.2 lists real KYC as a non-goal. **Rate limiting is not implemented** — it belongs with the reverse proxy and Redis, and applying it to the auth routes alone would be half a solution.
 
 ---
 
@@ -194,6 +218,11 @@ Phase 0 deferred two things deliberately, both recorded rather than quietly skip
 | **REST + OpenAPI over tRPC** | tRPC couples the tiers and hurts resale; generated clients give type safety *and* a language-agnostic contract |
 | **Postgres FTS over Typesense** | One-command spin-up matters more than the ceiling. A `SearchProvider` port documents the upgrade path. |
 | **Ledger from the first order** | Retrofitting double-entry onto existing orders is the most expensive mistake available here |
+| **`ts_rank`, not `ts_rank_cd`** | Cover density costs 1294 ms against 50k documents where `ts_rank` costs 246 ms, and rewards term proximity that barely exists in a four-word product name — [0015](./docs/architecture/0015-search-materialisation-and-ranking.md) |
+| **Products shared, listings tenant-owned** | The legacy schema had `products.email` — one row per seller — which makes cross-seller comparison impossible and leaves no buy box to build — [0014](./docs/architecture/0014-products-listings-and-the-buy-box.md) |
+| **Capabilities, never role names** | `@RequireCapability('member:write')` survives adding a sub-role; `role === 'OWNER'` does not — [0013](./docs/architecture/0013-capability-matrix-as-data.md) |
+| **Refresh tokens as families** | One row per token cannot express reuse detection: once the old hash is overwritten, a stolen token and an unknown one are indistinguishable — [0012](./docs/architecture/0012-refresh-token-families.md) |
+| **Google OAuth without Passport** | `@nestjs/passport` hands passport a `FastifyReply`, which lacks the redirect API it writes with — [0008](./docs/architecture/0008-google-oauth-without-passport.md) |
 
 ---
 

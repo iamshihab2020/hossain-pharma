@@ -9,6 +9,17 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: 180_000,
     pool: 'forks',
+    /**
+     * The performance suite is excluded from `pnpm test` and run by `pnpm perf`.
+     *
+     * Not because it is slow - it is - but because a BENCHMARK and a functional
+     * suite cannot share one database concurrently and both mean anything.
+     * Vitest runs test files in parallel, so a benchmark would be timing its own
+     * queries against a Postgres that eleven other files are simultaneously
+     * writing to, and its numbers would describe the harness rather than the
+     * code. It failed exactly that way before it was split out.
+     */
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.perf.test.ts'],
   },
   // Vitest 4 transforms with oxc, which supports legacy decorators and
   // design-time metadata. HealthController uses constructor injection

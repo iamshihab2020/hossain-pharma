@@ -6,9 +6,14 @@
       "Bash(find:*)",
       "Bash(ls:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Read(//c/Users/Shihab/Documents/**)",
+      "Read(//c/Users/Shihab/**)"
     ],
     "deny": [],
     "ask": []
+  },
+  "enabledPlugins": {
+    "telegram@claude-plugins-official": true
   }
 }

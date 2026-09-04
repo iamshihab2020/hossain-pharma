@@ -95,7 +95,7 @@ describe('the connecting role', () => {
 
 describe('withTenant', () => {
   it('sees only its own tenant rows', async () => {
-    const rows = await withTenant({ tenantId: tenantA, isAdmin: false }, (tx) =>
+    const rows = await withTenant({ tenantId: tenantA, userId: null, isAdmin: false }, (tx) =>
       tx.select().from(schema.rlsProbe),
     );
     expect(rows).toHaveLength(1);
@@ -103,7 +103,7 @@ describe('withTenant', () => {
   });
 
   it('sees the other tenant rows when given the other tenant', async () => {
-    const rows = await withTenant({ tenantId: tenantB, isAdmin: false }, (tx) =>
+    const rows = await withTenant({ tenantId: tenantB, userId: null, isAdmin: false }, (tx) =>
       tx.select().from(schema.rlsProbe),
     );
     expect(rows).toHaveLength(1);
@@ -112,14 +112,14 @@ describe('withTenant', () => {
 
   it('returns ZERO rows when tenant context is omitted, never all rows', async () => {
     // PRD 6.4 acceptance criterion 4. Failing open here is a breach, not a bug.
-    const rows = await withTenant({ tenantId: null, isAdmin: false }, (tx) =>
+    const rows = await withTenant({ tenantId: null, userId: null, isAdmin: false }, (tx) =>
       tx.select().from(schema.rlsProbe),
     );
     expect(rows).toHaveLength(0);
   });
 
   it('lets a platform admin see across tenants', async () => {
-    const rows = await withTenant({ tenantId: null, isAdmin: true }, (tx) =>
+    const rows = await withTenant({ tenantId: null, userId: null, isAdmin: true }, (tx) =>
       tx.select().from(schema.rlsProbe),
     );
     expect(rows).toHaveLength(2);
@@ -130,7 +130,7 @@ describe('withTenant', () => {
     // Postgres detail lives on .cause. Asserting the SQLSTATE is stronger than
     // matching a wrapper string: 42501 is insufficient_privilege, which is what
     // a WITH CHECK violation raises.
-    const attempt = withTenant({ tenantId: tenantA, isAdmin: false }, (tx) =>
+    const attempt = withTenant({ tenantId: tenantA, userId: null, isAdmin: false }, (tx) =>
       tx.insert(schema.rlsProbe).values({ tenantId: tenantB, payload: 'forged' }),
     );
 
@@ -150,7 +150,7 @@ describe('withTenant', () => {
   });
 
   it('leaves no trace of the refused cross-tenant write', async () => {
-    const rows = await withTenant({ tenantId: null, isAdmin: true }, (tx) =>
+    const rows = await withTenant({ tenantId: null, userId: null, isAdmin: true }, (tx) =>
       tx.select().from(schema.rlsProbe),
     );
     expect(rows.map((r) => r.payload)).not.toContain('forged');
@@ -163,7 +163,7 @@ describe('withTenant', () => {
     const singlePool = new Pool({ connectionString: appUri, max: 1 });
     const singleDb = drizzle(singlePool, { schema });
     try {
-      await makeWithTenant(singleDb)({ tenantId: tenantA, isAdmin: false }, (tx) =>
+      await makeWithTenant(singleDb)({ tenantId: tenantA, userId: null, isAdmin: false }, (tx) =>
         tx.select().from(schema.rlsProbe),
       );
       const leaked = await singleDb.execute<{ v: string | null }>(
@@ -183,7 +183,7 @@ describe('withTenant', () => {
     const work = Array.from({ length: 40 }, (_, i) => {
       const tenantId = i % 2 === 0 ? tenantA : tenantB;
       const expected = i % 2 === 0 ? 'secret-of-a' : 'secret-of-b';
-      return withTenant({ tenantId, isAdmin: false }, (tx) =>
+      return withTenant({ tenantId, userId: null, isAdmin: false }, (tx) =>
         tx.select().from(schema.rlsProbe),
       ).then((rows) => ({ rows, expected }));
     });
@@ -195,9 +195,51 @@ describe('withTenant', () => {
     }
   });
 
+  it('sets app.user_id transaction-locally and reads it back', async () => {
+    // Plan D-A. org_members must answer "which orgs does this caller belong
+    // to?" BEFORE any tenant is known, so the caller identity travels as a
+    // third GUC alongside the tenant.
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const seen = await withTenant({ tenantId: null, userId, isAdmin: false }, async (tx) => {
+      const r = await tx.execute<{ v: string | null }>(
+        sql`SELECT current_setting('app.user_id', true) AS v`,
+      );
+      return r.rows[0]?.v ?? null;
+    });
+    expect(seen).toBe(userId);
+  });
+
+  it('leaves app.user_id unset after the transaction commits', async () => {
+    const singlePool = new Pool({ connectionString: appUri, max: 1 });
+    const singleDb = drizzle(singlePool, { schema });
+    try {
+      await makeWithTenant(singleDb)(
+        { tenantId: null, userId: '11111111-1111-4111-8111-111111111111', isAdmin: false },
+        () => undefined,
+      );
+      const leaked = await singleDb.execute<{ v: string | null }>(
+        sql`SELECT current_setting('app.user_id', true) AS v`,
+      );
+      const value = leaked.rows[0]?.v ?? null;
+      expect(value === null || value === '').toBe(true);
+    } finally {
+      await singlePool.end();
+    }
+  });
+
+  it('writes an empty string for a null userId so NULLIF can fail it closed', async () => {
+    const seen = await withTenant({ tenantId: null, userId: null, isAdmin: false }, async (tx) => {
+      const r = await tx.execute<{ v: string | null }>(
+        sql`SELECT current_setting('app.user_id', true) AS v`,
+      );
+      return r.rows[0]?.v ?? null;
+    });
+    expect(seen).toBe('');
+  });
+
   it('rolls back and does not swallow an error from the callback', async () => {
     await expect(
-      withTenant({ tenantId: tenantA, isAdmin: false }, () => {
+      withTenant({ tenantId: tenantA, userId: null, isAdmin: false }, () => {
         throw new Error('boom');
       }),
     ).rejects.toThrow('boom');
@@ -206,13 +248,13 @@ describe('withTenant', () => {
   it('rolls back writes when the callback throws after inserting', async () => {
     const marker = 'rollback-canary';
     await expect(
-      withTenant({ tenantId: tenantA, isAdmin: false }, async (tx) => {
+      withTenant({ tenantId: tenantA, userId: null, isAdmin: false }, async (tx) => {
         await tx.insert(schema.rlsProbe).values({ tenantId: tenantA, payload: marker });
         throw new Error('abort after write');
       }),
     ).rejects.toThrow('abort after write');
 
-    const rows = await withTenant({ tenantId: tenantA, isAdmin: false }, (tx) =>
+    const rows = await withTenant({ tenantId: tenantA, userId: null, isAdmin: false }, (tx) =>
       tx.select().from(schema.rlsProbe),
     );
     expect(rows.map((r) => r.payload)).not.toContain(marker);

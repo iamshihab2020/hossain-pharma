@@ -36,6 +36,17 @@ export const organisations = pgTable('organisations', {
     .references(() => currencies.code),
   /** Retained by the ETL so a migrated row can be traced back to its Mongo original. */
   legacyMongoId: text('legacy_mongo_id'),
+  /**
+   * PRD 9.3 seller governance. Set by the admin approval queue in Task 12.
+   *
+   * reviewedBy deliberately carries NO foreign key to users. org-members.ts and
+   * seller-documents.ts already import this module, and pointing back at users
+   * from here closes a cycle that breaks Drizzle's relation inference.
+   * Referential integrity is enforced in the service layer instead.
+   */
+  reviewedBy: uuid('reviewed_by'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewNote: text('review_note'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

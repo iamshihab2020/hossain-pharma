@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository directory is still `hossain-pharma` and the git history begins as a pharmacy project. That is historical. **Pharmacy is not a vertical here** and prescription medicine is explicitly out of scope — do not reintroduce health framing into naming, seed data, or copy. Names inside `archive/` are left alone on purpose.
 
-Work is organised into 13 phases. **Phase 0 is complete; Phases 1-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec and `docs/architecture/` holds the decision records. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related.
+Work is organised into 13 phases. **Phases 0-3 are complete; Phases 4-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec and `docs/architecture/` holds the decision records. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
 
 ## Commands
 
@@ -17,7 +17,7 @@ cp .env.example .env
 pnpm install
 docker compose up -d          # Postgres on 5433, Redis on 6380 (NOT the defaults)
 pnpm db:push                  # runs migrations; see "db:push is a lie" below
-pnpm seed                     # idempotent, safe to re-run
+pnpm seed                     # idempotent (8 orgs, 5 users, 11 categories, 3 products, 4 listings)
 pnpm dev                      # api :4000 · web :3000 · worker
 ```
 
@@ -26,6 +26,15 @@ The four CI gates, which must all pass:
 ```bash
 pnpm lint && pnpm type-check && pnpm test && pnpm build
 ```
+
+The search benchmark is **not** in `pnpm test` and has its own script and CI job:
+
+```bash
+pnpm --filter @nexmarket/api perf     # 50k documents, one file at a time
+```
+
+A benchmark sharing a database with eleven parallel test files times the
+contention, not the query. It failed exactly that way before it was split out.
 
 Per-package and single tests:
 
@@ -57,6 +66,16 @@ Each app and package has its own README describing its internal conventions. Rea
 
 A tenant is a **seller organisation**. Buyers are not tenants; they belong to the platform and shop across all sellers. Tenant-owned tables carry `tenant_id` and are isolated by Postgres row-level security, not by application `WHERE` clauses.
 
+`users`, `user_identities` and `sessions` are **platform-owned**: no `tenant_id`, no RLS,
+and that is a decision rather than an omission (there is a test asserting it). So is the
+whole catalogue — `categories`, `products`, `product_variants`, `product_media`,
+`product_attributes` — because a catalogue entry shared by competing sellers is the point
+of PRD 8.3. The tenant-owned tables are `org_members`, `seller_documents`, `listings`,
+`inventory_items`, `warehouses` and the `rls_probe` canary. `search_documents`,
+`recently_viewed` and `saved_searches` are platform-owned too - the first describes
+already-public products, the other two are scoped by `user_id` in the service, which is
+then the ONLY boundary and is tested as one.
+
 Three separate mistakes each reduce RLS to decoration, and **all three fail silently**:
 
 1. **A session-level `SET` instead of transaction-local.** Always
@@ -67,6 +86,11 @@ Three separate mistakes each reduce RLS to decoration, and **all three fail sile
    policy, and migrations own the tables.
 3. **Connecting as a role with `BYPASSRLS`.** It ignores all policies regardless.
    Neon's default `neondb_owner` carries it.
+
+`TenantContext` carries **three** values - `tenantId`, `userId` and `isAdmin` - and
+`withTenant` sets a GUC for each. `app.user_id` exists so `org_members` can answer
+"which organisations does this caller belong to?" *before* any tenant is known: the
+lookup that decides `tenant_id` cannot itself require `tenant_id`. See ADR 0011.
 
 Consequences for anything you write:
 
@@ -79,6 +103,49 @@ Consequences for anything you write:
   tenant raises `invalid input syntax for type uuid` instead of returning zero rows.
 - **Missing tenant context must return zero rows, never all rows.**
 - `rls_probe` is a deliberate canary table with no business meaning. Keep it.
+- **`org_members` carries a second, SELECT-only `own_membership` policy**, gated on no
+  tenant being selected (migration 0006). Permissive policies are ORed, so an ungated
+  version made every tenant-scoped read return the caller's rows from other tenants
+  as well. It has no `WITH CHECK`, deliberately - that is what stops a user granting
+  themselves a membership.
+- **A second permissive policy on a tenant-owned table widens every tenant-scoped read.**
+  Postgres ORs them. This has now bitten twice - `own_membership` on `org_members`
+  (migration 0006) and `public_active_offers` on `listings` (0008) - and both fixes are
+  the same: gate the extra policy on
+  `NULLIF(current_setting('app.tenant_id', true), '') IS NULL`, so it applies only while
+  no tenant is selected. Assume any new policy has this bug until a test says otherwise.
+- **The seed writes `org_members` through `withTenant`.** The seed connects as
+  `nexmarket_app` (NOBYPASSRLS), so a plain `db.insert(orgMembers)` inserts **zero rows
+  and throws nothing** - the `WITH CHECK` silently rejects every row whose tenant it
+  cannot attribute, and the seed reports success against an empty table.
+
+### The request pipeline
+
+`AuthGuard` and `TenantInterceptor` are registered **globally** in `app.module.ts`, so a
+new controller with no decorators is closed and tenant-scoped. Opting out is `@Public()`.
+
+- **Services take their transaction from `getRequestContext().tx`**, never a `db` handle.
+  The GUCs are transaction-local, so any other connection carries no tenant context.
+  `getRequestContext()` throws outside a request rather than falling back.
+- **Guards run before interceptors**, always. That is why the capability check lives
+  *inside* `TenantInterceptor` and not in an `APP_GUARD` - a guard cannot read the roles
+  the interceptor resolves. `AdminGuard` can be a guard, because `platform_role` is a
+  token claim `AuthGuard` already attached. ADR 0009.
+- The tenant arrives as an `x-tenant-id` header, validated as a UUID before it reaches
+  `set_config` - otherwise the policy's `NULLIF(...)::uuid` cast raises inside the query
+  and a caller typo becomes a 500.
+- Capabilities are declared with `@RequireCapability('member:write')`. **Never read a
+  role name.** ADR 0013.
+- **Two places move `app.tenant_id` outside `withTenant`**, both in
+  `common/tenant-scope.ts`: founding an organisation, and reindexing search (a
+  cross-tenant aggregate). Both are transaction-local and restore in a `finally`. Before
+  adding a third, ask whether the work is genuinely not tenant-scoped or is tenant-scoped
+  work being done from the wrong place - it has been the second more often.
+- **A write that changes what a buyer would FIND must reindex.** `SearchIndexService` is
+  the only writer of `search_documents`; the hooks live in the listings, catalogue-admin
+  and org-governance services. Suspending a seller is the least obvious one. The drift
+  test in `search.e2e` compares the table to its source view and is what makes that list
+  verifiable rather than a claim.
 
 `DATABASE_URL` connects as `nexmarket_app` (NOBYPASSRLS). `DATABASE_MIGRATION_URL`
 connects as the owner, which has the DDL rights the app role deliberately lacks.
@@ -152,5 +219,20 @@ projects on this machine bind 5432/6379. Container-internal ports are standard.
   `apps/web/node_modules/next/dist/docs/`. Read those rather than relying on Next 15 habits.
 - `apps/web/AGENTS.md` and `apps/web/CLAUDE.md` are generated and re-added by `next dev`.
   They are committed deliberately; deleting them only recreates an uncommitted change.
-- Test coverage thresholds are enforced at 100% on `money.ts`, `tenant-context.ts` and
-  `assert-driver.ts`. If one fails, add the missing test rather than lowering the threshold.
+- Test coverage thresholds are enforced at 100% on `money.ts`, `capabilities.ts`,
+  `buy-box.ts`, `tenant-context.ts` and `assert-driver.ts`. If one fails, add the missing test rather
+  than lowering the threshold.
+- **Never mutate seeded users or organisations in a test.** Granting
+  `tanvir@acme.test` a role in one file changed what he could do in another, which passed
+  alone and failed in the suite. Register your own fixtures.
+- **Namespace test emails per file** (`onboarding-`, `admin-`, ...). Vitest runs test
+  files in parallel against the one database the API suite starts, and `users.email` is
+  globally unique, so a bare `dupe@example.test` in two files is a 409 for whichever
+  loses the race - green in a single-file run, red in the suite.
+- **A raw `tx.execute` skips Drizzle's column mapping**, so a timestamptz can come back
+  as a string rather than a Date. Normalise it; the assumption survives every small test
+  and fails on the first result set large enough to page.
+- **Do not put a correlated subquery in a Drizzle `sql` template in the SELECT list.**
+  Drizzle renders the column references there *without table qualification*, so
+  `WHERE ${a.tenantId} = ${b.id}` becomes `WHERE "tenant_id" = "id"` - the table
+  compared to itself, always false, no error. It cost an afternoon once; ADR 0010.

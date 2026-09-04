@@ -15,6 +15,69 @@
       "when": 1787484683565,
       "tag": "0001_rls_probe_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787967626964,
+      "tag": "0002_identity_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787968182002,
+      "tag": "0003_membership_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787968197652,
+      "tag": "0004_membership_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787969280826,
+      "tag": "0005_session_families",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788517493590,
+      "tag": "0006_own_membership_bootstrap_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788520202156,
+      "tag": "0007_catalogue_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788520210207,
+      "tag": "0008_catalogue_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788521957480,
+      "tag": "0009_search_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788521974666,
+      "tag": "0010_search_index",
+      "breakpoints": true
     }
   ]
 }

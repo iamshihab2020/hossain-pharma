@@ -4,6 +4,15 @@ import type * as schema from './schema/index.js';
 
 export type TenantContext = {
   readonly tenantId: string | null;
+  /**
+   * PRD 5.1. Carried so org_members can answer "which orgs does this caller
+   * belong to?" BEFORE any tenant is known - the lookup that decides tenantId
+   * cannot itself require tenantId. Migration 0003 pairs this with an
+   * own_membership SELECT-only policy. See plan decision D-A.
+   *
+   * Required, not optional, on purpose: every call site must decide.
+   */
+  readonly userId: string | null;
   readonly isAdmin: boolean;
 };
 
@@ -28,7 +37,7 @@ export type Transaction = Parameters<Parameters<Db['transaction']>[0]>[0];
  * NEVER replace set_config(..., true) with a plain SET, and never set tenant
  * context outside a transaction.
  *
- * Note the empty string for a null tenant. Migration 0001 wraps the policy
+ * Note the empty string for a null tenant or user. Migration 0001 wraps the policy
  * comparison in NULLIF(..., '') so that reads back as NULL, and `tenant_id =
  * NULL` is NULL rather than TRUE - which means no rows. Missing context fails
  * closed.
@@ -39,8 +48,19 @@ export function makeWithTenant(database: Db) {
     fn: (tx: Transaction) => Promise<T> | T,
   ): Promise<T> {
     return database.transaction(async (tx) => {
-      await tx.execute(sql`SELECT set_config('app.tenant_id', ${ctx.tenantId ?? ''}, true)`);
-      await tx.execute(sql`SELECT set_config('app.is_admin', ${String(ctx.isAdmin)}, true)`);
+      // ONE statement, not three. set_config returns its value, so all three
+      // fit in a single SELECT - and that is three network round trips saved on
+      // EVERY request in the system, not just the ones that go on to do
+      // something expensive. It showed up while chasing a search latency
+      // budget and turned out to be the cheapest millisecond in the codebase.
+      //
+      // The semantics are identical: same GUCs, same values, same is_local
+      // flag, same transaction. Postgres evaluates the three calls in one
+      // statement before anything else in this transaction runs.
+      await tx.execute(sql`SELECT
+        set_config('app.tenant_id', ${ctx.tenantId ?? ''}, true),
+        set_config('app.user_id', ${ctx.userId ?? ''}, true),
+        set_config('app.is_admin', ${String(ctx.isAdmin)}, true)`);
       return fn(tx);
     });
   };

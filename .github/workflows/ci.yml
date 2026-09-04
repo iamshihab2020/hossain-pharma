@@ -49,6 +49,34 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # The search benchmark, on its own runner.
+  #
+  # Separate from `verify` because a BENCHMARK and a functional suite cannot
+  # share one database concurrently and both mean anything: vitest runs test
+  # files in parallel, so a benchmark run inside the main suite times its own
+  # queries against a Postgres that eleven other files are writing to. It failed
+  # exactly that way before it was split out.
+  #
+  # It asserts the best observed latency per query shape at 50k documents and
+  # that the GIN indexes are used; it reports the full distribution. The strict
+  # PRD p95 needs dedicated hardware - see ADR 0015.
+  search-perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @nexmarket/db build && pnpm --filter @nexmarket/shared build
+      - name: Search performance at 50k products
+        run: pnpm --filter @nexmarket/api perf
+
   # Proves success criterion S4 - a clean machine reaches a migrated, seeded
   # database. Separate from `verify` because it needs a real Postgres service
   # and exercises the documented one-liner rather than the test harness.
@@ -122,12 +150,98 @@ jobs:
             exit 1
           fi
 
-      - name: Assert RLS is enabled AND forced on tenant tables
+      # org_members is FORCE RLS and the seed connects as nexmarket_app
+      # (NOBYPASSRLS), so a plain insert writes ZERO rows and throws nothing.
+      # Counted here on the OWNER connection: a green seed with an empty
+      # membership table is the exact failure this asserts against.
+      - name: Assert identity and membership rows exist
         run: |
-          result=$(psql "$DATABASE_MIGRATION_URL" -tAc \
-            "SELECT relrowsecurity::text || ',' || relforcerowsecurity::text FROM pg_class WHERE relname='rls_probe'")
-          echo "rls_probe enabled,forced = $result"
-          if [ "$result" != "true,true" ]; then
-            echo "::error::rls_probe must have RLS enabled and FORCED, got $result"
+          counts=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT (SELECT count(*) FROM users) || ',' || (SELECT count(*) FROM org_members)")
+          echo "users,org_members = $counts"
+          if [ "$counts" != "5,6" ]; then
+            echo "::error::expected 5,6 after two seed runs, got $counts"
             exit 1
           fi
+
+      # Phase 2. The catalogue is the fixture the buy box is judged against, so
+      # a seed that quietly stopped producing two competing offers would make
+      # the acceptance test pass over an empty comparison.
+      - name: Assert the catalogue seeded, including two sellers on one variant
+        run: |
+          counts=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT (SELECT count(*) FROM categories) || ',' || (SELECT count(*) FROM products) || ',' || (SELECT count(*) FROM listings)")
+          echo "categories,products,listings = $counts"
+          if [ "$counts" != "11,3,4" ]; then
+            echo "::error::expected 11,3,4 after two seed runs, got $counts"
+            exit 1
+          fi
+          competing=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT count(*) FROM (SELECT variant_id FROM listings GROUP BY variant_id HAVING count(DISTINCT tenant_id) > 1) x")
+          echo "variants with more than one seller = $competing"
+          if [ "$competing" -lt 1 ]; then
+            echo "::error::no variant has two competing sellers - the Phase 2 fixture is gone"
+            exit 1
+          fi
+
+      # available_stock is the only stock figure an anonymous product page can
+      # see. If it drifts from inventory_items the buy box includes or excludes
+      # the wrong offers, and nothing else would notice.
+      # Phase 3. The search index is a materialisation, so the check that
+      # matters is not "are there rows" but "do the rows agree with the view
+      # they are built from". A missed reindex hook produces documents that look
+      # entirely normal and are stale.
+      - name: Assert the search index agrees with its source view
+        run: |
+          drift=$(psql "$DATABASE_MIGRATION_URL" -tAc             "SELECT (SELECT count(*) FROM search_document_source s LEFT JOIN search_documents d ON d.product_id = s.product_id WHERE d.product_id IS NULL)
+                  + (SELECT count(*) FROM search_documents d LEFT JOIN search_document_source s ON s.product_id = d.product_id WHERE s.product_id IS NULL)")
+          echo "documents missing from or stale in the index = $drift"
+          if [ "$drift" != "0" ]; then
+            echo "::error::search_documents disagrees with search_document_source on $drift product(s)"
+            exit 1
+          fi
+
+      - name: Assert the search extensions and indexes exist
+        run: |
+          missing=$(psql "$DATABASE_MIGRATION_URL" -tAc             "SELECT 3 - (SELECT count(*) FROM pg_indexes WHERE tablename='search_documents' AND indexname IN ('search_documents_tsv_idx','search_documents_trgm_idx','search_documents_name_trgm_idx'))")
+          echo "missing search indexes = $missing"
+          if [ "$missing" != "0" ]; then
+            echo "::error::a search index is missing - typo tolerance and the p95 budget both depend on them"
+            exit 1
+          fi
+          psql "$DATABASE_MIGRATION_URL" -tAc "SELECT extname FROM pg_extension WHERE extname IN ('ltree','pg_trgm') ORDER BY 1"
+
+      - name: Assert available_stock agrees with the inventory it summarises
+        run: |
+          drift=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT count(*) FROM listings l
+               LEFT JOIN (SELECT listing_id, sum(on_hand - reserved)::int AS n FROM inventory_items GROUP BY listing_id) i
+                 ON i.listing_id = l.id
+              WHERE l.available_stock IS DISTINCT FROM coalesce(i.n, 0)")
+          echo "listings whose available_stock disagrees with inventory = $drift"
+          if [ "$drift" != "0" ]; then
+            echo "::error::available_stock has drifted from inventory_items on $drift listing(s)"
+            exit 1
+          fi
+
+      - name: Assert one user holds memberships in two organisations (PRD 5.1)
+        run: |
+          n=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+            "SELECT count(*) FROM (SELECT user_id FROM org_members GROUP BY user_id HAVING count(DISTINCT tenant_id) > 1) x")
+          echo "users in more than one org = $n"
+          if [ "$n" -lt 1 ]; then
+            echo "::error::no user holds memberships in two organisations"
+            exit 1
+          fi
+
+      - name: Assert RLS is enabled AND forced on every tenant-owned table
+        run: |
+          for table in rls_probe org_members seller_documents listings inventory_items warehouses; do
+            result=$(psql "$DATABASE_MIGRATION_URL" -tAc \
+              "SELECT relrowsecurity::text || ',' || relforcerowsecurity::text FROM pg_class WHERE relname='$table'")
+            echo "$table enabled,forced = $result"
+            if [ "$result" != "true,true" ]; then
+              echo "::error::$table must have RLS enabled and FORCED, got $result"
+              exit 1
+            fi
+          done

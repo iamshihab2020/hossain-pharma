@@ -41,3 +41,8 @@ Thumbs.db
 
 # Deploy
 .vercel
+
+# Local file-storage adapter output (Phase 1 mock KYC). Never committed:
+# these are uploaded identity documents, and the default FILE_STORAGE_DIR is
+# inside the repo so a missing entry here would commit them.
+.nexmarket/

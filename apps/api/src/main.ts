@@ -1,10 +1,12 @@
+import './config/load-dotenv.js';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 // eslint-disable-next-line no-restricted-imports
 import { assertInteractiveTransactions, pool } from '@nexmarket/db';
 import { AppModule } from './app.module.js';
+import { configureApp, createAdapter } from './configure-app.js';
 import { loadApiEnv } from './config/env.js';
 
 // The import above is one of exactly two sanctioned uses of the raw pool
@@ -20,7 +22,8 @@ async function bootstrap(): Promise<void> {
   // than serving requests whose RLS context silently does nothing.
   await assertInteractiveTransactions(pool);
 
-  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, createAdapter());
+  await configureApp(app);
 
   const config = new DocumentBuilder()
     .setTitle('NexMarket API')

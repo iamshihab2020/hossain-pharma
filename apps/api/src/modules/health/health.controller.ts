@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { Public } from '../../common/decorators/public.decorator.js';
 import { HealthService, type HealthResponse } from './health.service.js';
 
 @ApiTags('health')
@@ -12,6 +13,12 @@ export class HealthController {
   // a dozen injected services.
   constructor(private readonly health: HealthService) {}
 
+  /**
+   * Public because a liveness probe runs before anything has a token, and a
+   * health endpoint that needs authentication cannot tell a load balancer that
+   * authentication is broken.
+   */
+  @Public()
   @Get()
   @ApiOkResponse({ description: 'Service and database liveness.' })
   async check(): Promise<HealthResponse> {

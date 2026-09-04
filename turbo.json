@@ -1,6 +1,22 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalEnv": ["NODE_ENV", "DATABASE_URL", "REDIS_URL"],
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "DATABASE_MIGRATION_URL",
+    "REDIS_URL",
+    "JWT_ACCESS_SECRET",
+    "JWT_REFRESH_SECRET",
+    "ACCESS_TOKEN_TTL_SECONDS",
+    "REFRESH_TOKEN_TTL_DAYS",
+    "COOKIE_DOMAIN",
+    "COOKIE_SECURE",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "GOOGLE_CALLBACK_URL",
+    "WEB_APP_URL",
+    "FILE_STORAGE_DIR"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

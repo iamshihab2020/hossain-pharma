@@ -7,51 +7,90 @@ NestJS 11 on Fastify. REST with an OpenAPI document generated from decorators.
 ```
 src/
 ├── main.ts                    bootstrap: env, driver probe, Swagger, listen
+├── configure-app.ts           createAdapter() + plugins, shared with the e2e suite
 ├── app.module.ts              root module; every domain module registers here
 │
 ├── config/                    configuration and environment
-│   └── env.ts                 zod-validated process.env, fails the boot
+│   ├── env.ts                 zod-validated process.env, fails the boot
+│   └── load-dotenv.ts         .env loading, main.ts only
 │
 ├── common/                    cross-cutting, imported by many modules
-│   ├── decorators/            @CurrentUser, @Tenant, @Public, @Capability
-│   ├── filters/               exception filters, error shape
-│   ├── guards/                Auth, Capability, Tenant  (Phase 1)
-│   └── interceptors/          TenantInterceptor -> withTenant  (Phase 1)
+│   ├── decorators/            @Public, @RequireCapability, @PlatformAdmin, @CurrentUser
+│   ├── guards/                AuthGuard (global), AdminGuard (global), CapabilityGuard
+│   ├── interceptors/          TenantInterceptor -> withTenant (global)
+│   ├── request-context.ts     AsyncLocalStorage carrying the transaction
+│   └── pagination.ts          cursor helpers (PRD 13)
 │
 └── modules/                   one folder per domain area (PRD 7.2)
+    ├── auth/                  register · login · refresh · logout · Google OAuth
+    ├── orgs/                  seller onboarding, documents, members
+    ├── admin/                 the approval queue
     └── health/
-        ├── health.controller.ts    HTTP surface, OpenAPI decorators
-        ├── health.service.ts       behaviour, no HTTP types
-        └── health.module.ts        wiring
 ```
 
 ## Conventions
 
 **One folder per domain module**, named for the domain, holding
 `<name>.controller.ts`, `<name>.service.ts`, `<name>.module.ts`, and as they
-appear: `dto/`, `entities/`, `<name>.repository.ts`.
+appear: `dto.ts`, `<name>.repository.ts`, ports and adapters.
 
 **Controllers hold no logic.** They translate HTTP to a service call and back.
-Services never import `@nestjs/common` HTTP types.
+Services never import `@nestjs/common` HTTP types beyond the exceptions they
+throw.
 
-**Database access goes through `withTenant`,** never the raw `db` or `pool`
-handle. A lint rule enforces this (PRD 6.4 criterion 2). There are exactly two
-sanctioned exceptions, both liveness-related and both commented at the import:
-the boot probe in `main.ts` and `HealthService`.
+**Services take their transaction from `getRequestContext()`,** never a `db` or
+`pool` handle. A lint rule enforces the import ban (PRD 6.4 criterion 2). There
+are exactly two sanctioned exceptions, both liveness-related and both commented
+at the import: the boot probe in `main.ts` and `HealthService`.
 
-**Every route is deny-by-default** once guards land in Phase 1. A public route
-is public because it is explicitly marked, never by omission.
+`getRequestContext()` **throws** outside a request. That is deliberate: code
+running outside the interceptor's scope has no tenant context, and a loud
+failure beats a silent fall back to an unscoped connection.
+
+**Every route is deny-by-default.** `AuthGuard` and `TenantInterceptor` are
+registered globally in `app.module.ts`, so a controller with no decorators is
+closed and tenant-scoped. A public route is public because it is explicitly
+`@Public()`, never by omission — and `test/route-coverage.e2e.test.ts` enumerates
+the router and probes every route to prove it.
+
+**Guards run before interceptors**, always, whatever order the providers are
+listed in. That is why the capability check runs inside `TenantInterceptor`
+rather than as a second `APP_GUARD`. `AdminGuard` *can* be a guard, because
+`platform_role` is a token claim `AuthGuard` has already attached. See ADR 0009.
+
+**Authorise on capabilities, never role names.** `@RequireCapability('member:write')`
+survives adding a sub-role; `role === 'OWNER'` does not. ADR 0013.
+
+**The active tenant is the `x-tenant-id` header,** checked against the caller's
+memberships before the controller runs. A malformed value is a 400, and a tenant
+the caller does not belong to is a 403 — never an empty 200, which would render
+as an ordinary empty list and hide the refusal.
+
+**Build the Fastify adapter with `createAdapter()`.** `bodyLimit` is a
+constructor option, so a stray `new FastifyAdapter()` silently reverts to
+Fastify's 1 MiB default and produces a 413 that no test reproduces.
 
 **File extensions in imports are `.js`.** This package is ESM (`"type":
 "module"`), because `@nexmarket/db` and `@nexmarket/shared` are ESM and TypeScript
 refuses a static CommonJS-to-ESM import. Decorators are unaffected.
 
+## Tests
+
+`pnpm test` starts one Postgres via Testcontainers, migrates it and seeds it
+before any test file is imported (`test/global-setup.ts`), then runs the files in
+parallel against it.
+
+**Namespace test emails per file** (`onboarding-`, `admin-`, …). `users.email`
+is globally unique and the files share one database, so a bare
+`dupe@example.test` in two files is a 409 for whichever loses the race — green in
+a single-file run, red in the suite.
+
 ## Modules to come
 
-Per PRD 7.2, each arrives with its phase: `auth` and `tenancy` (Phase 1),
-`catalogue` (2), `search` (3), `cart` and `checkout` (4), `orders` and
-`fulfilment` (5), `logistics` (6), `reviews` (7), `returns` (8), `promotions`
-and `loyalty` (9), `ads` (10), `admin` (11).
+Per PRD 7.2, each arrives with its phase: `catalogue` (2), `search` (3), `cart`
+and `checkout` (4), `orders` and `fulfilment` (5), `logistics` (6), `reviews`
+(7), `returns` (8), `promotions` and `loyalty` (9), `ads` (10). `admin` exists
+and grows through Phase 11.
 
 ## Scripts
 
@@ -64,4 +103,5 @@ and `loyalty` (9), `ads` (10), `admin` (11).
 | `pnpm lint` | eslint over `src` and `test` |
 
 `GET /health` returns service and database liveness. `GET /docs` serves Swagger
-UI, `GET /docs-json` the raw OpenAPI document.
+UI, `GET /docs-json` the raw OpenAPI document; a test asserts every registered
+route appears in it.

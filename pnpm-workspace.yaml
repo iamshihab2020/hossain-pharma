@@ -18,3 +18,7 @@ allowBuilds:
   # Optional native accelerator for BullMQ's msgpackr serialiser.
   # The pure-JS fallback works; off means CI needs no build toolchain.
   msgpackr-extract: false
+  # argon2id hashing (PRD 13). Ships napi prebuilds; the build step selects the
+  # platform binary. Without this pnpm 11 blocks it and every hash call throws
+  # at runtime rather than at install time.
+  '@node-rs/argon2': true
