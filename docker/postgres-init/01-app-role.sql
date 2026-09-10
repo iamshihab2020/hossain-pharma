@@ -8,7 +8,16 @@
 -- Neon hands you an owner role (neondb_owner) that DOES carry rolbypassrls.
 -- See docs/runbook/neon-setup.md before pointing DATABASE_URL at Neon.
 
-CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'nexmarket_dev_password' NOBYPASSRLS;
+-- Idempotent, so the file can be re-run. The e2e suite drops and recreates the
+-- public schema between runs, which takes the app role's grants with it, and
+-- replaying this script is how they come back.
+DO $$
+BEGIN
+  CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'nexmarket_dev_password' NOBYPASSRLS;
+EXCEPTION WHEN duplicate_object THEN
+  RAISE NOTICE 'nexmarket_app already exists, re-granting only';
+END
+$$;
 
 -- :"DBNAME" is a psql built-in holding the database this script is running
 -- against, so this file works for any POSTGRES_DB. It used to name `nexmarket`

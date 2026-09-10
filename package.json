@@ -18,7 +18,9 @@
     "db:migrate": "pnpm --filter @nexmarket/db run migrate",
     "seed": "pnpm --filter @nexmarket/db run seed",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "e2e": "pnpm --filter @nexmarket/e2e e2e",
+    "e2e:baseline": "pnpm --filter @nexmarket/e2e e2e:baseline"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

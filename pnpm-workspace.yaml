@@ -22,3 +22,7 @@ allowBuilds:
   # platform binary. Without this pnpm 11 blocks it and every hash call throws
   # at runtime rather than at install time.
   '@node-rs/argon2': true
+  # Downloads the browser binaries on install. Without this pnpm 11 blocks the
+  # postinstall and every test fails at RUN time with "browser not found",
+  # which is a far worse place to learn about it than install time.
+  '@playwright/test': true

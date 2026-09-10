@@ -1,0 +1,22 @@
+{
+  "name": "@nexmarket/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "tsx scripts/reset-db.ts && playwright test",
+    "e2e:ui": "tsx scripts/reset-db.ts && playwright test --ui",
+    "e2e:baseline": "bash scripts/baseline.sh",
+    "lint": "eslint . --ignore-pattern eslint.config.js",
+    "type-check": "tsc --noEmit",
+    "test": "echo 'e2e runs via pnpm e2e - it is a separate gate, not part of pnpm test'"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@nexmarket/api-client": "workspace:*",
+    "@nexmarket/config": "workspace:*",
+    "@playwright/test": "^1.56.0",
+    "dotenv": "^17.2.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
