@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import { decodeCursor, toPage, type Page } from '../../common/pagination.js';
 import { getRequestContext } from '../../common/request-context.js';
@@ -168,7 +168,13 @@ export class OrdersService {
     const rows = await tx
       .select()
       .from(schema.orderItems)
-      .where(sql`${schema.orderItems.orderId} = ANY(${orderIds})`);
+      // `inArray`, not sql`... = ANY(${orderIds})`. Drizzle's sql template
+      // expands a JS array into a PARAMETER LIST, so that rendered
+      // `= ANY(($1))` with the uuid bound as a plain string and every real read
+      // died on "malformed array literal". It went unnoticed because the only
+      // test that read this path used a buyer with NO orders, and withItems
+      // returns early on an empty id list - so the statement never ran.
+      .where(inArray(schema.orderItems.orderId, orderIds));
 
     const byOrder = new Map<string, OrderItemView[]>();
     for (const row of rows) {
