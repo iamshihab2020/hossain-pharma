@@ -86,8 +86,18 @@ export const paymentEvents = pgTable(
   (t) => [unique('payment_events_provider_event_key').on(t.provider, t.providerEventId)],
 );
 
-/** COD_ACCRUAL is Phase 4's placeholder posting; Phase 6 collects against it. */
-export const transactionKind = pgEnum('transaction_kind', ['CAPTURE', 'REFUND', 'COD_ACCRUAL']);
+/**
+ * COD_ACCRUAL is Phase 4's placeholder posting; Phase 6 collects against it.
+ * FULFILMENT is a dispatch releasing one shipment's share from clearing to the
+ * seller's payable. REFUND covers a cancellation's reversal - ADR 0016 said
+ * refunds would need no schema change, and Phase 5 confirmed it.
+ */
+export const transactionKind = pgEnum('transaction_kind', [
+  'CAPTURE',
+  'REFUND',
+  'COD_ACCRUAL',
+  'FULFILMENT',
+]);
 
 export const transactions = pgTable(
   'transactions',

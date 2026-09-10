@@ -11,5 +11,6 @@ export * from './search.js';
 export * from './carts.js';
 export * from './payments.js';
 export * from './orders.js';
+export * from './fulfilment.js';
 export * from './ledger.js';
 export * from './rls-probe.js';

@@ -92,6 +92,13 @@
       "when": 1788538392618,
       "tag": "0012_commerce_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789038485970,
+      "tag": "0013_fulfilment_tables",
+      "breakpoints": true
     }
   ]
 }

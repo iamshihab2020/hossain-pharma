@@ -41,7 +41,7 @@ export class LedgerService {
     tx: Transaction,
     input: {
       paymentIntentId: string;
-      kind: 'CAPTURE' | 'REFUND' | 'COD_ACCRUAL';
+      kind: 'CAPTURE' | 'REFUND' | 'COD_ACCRUAL' | 'FULFILMENT';
       entries: readonly Entry[];
     },
   ): Promise<string> {

@@ -35,13 +35,23 @@ import { users } from './users.js';
  */
 
 /**
- * Phase 4 places orders and takes payment; Phase 5 owns fulfilment and adds the
- * rest of the state machine. The states absent here are absent because nothing
- * can reach them yet, not because they were forgotten.
+ * The lifecycle lives in `order-state.ts` in @nexmarket/shared, which owns the
+ * transition table and computes this column from line coverage. Nothing sets a
+ * status by hand; a caller accepts, ships or cancels, and the status follows.
+ *
+ * Deliberately not PRD 9.2's list. PACKED moves no money and no stock and a
+ * buyer cannot tell it from ACCEPTED; OUT_FOR_DELIVERY is a carrier event and
+ * belongs to Phase 6; PARTIALLY_SHIPPED, which the Phase 5 acceptance criterion
+ * requires, has nowhere to live in a linear list.
  */
 export const orderStatus = pgEnum('order_status', [
   'PENDING_PAYMENT',
   'PAID',
+  'ACCEPTED',
+  'REJECTED',
+  'PARTIALLY_SHIPPED',
+  'SHIPPED',
+  'DELIVERED',
   'CANCELLED',
 ]);
 
@@ -130,6 +140,17 @@ export const orderItems = pgTable(
     variantSku: text('variant_sku').notNull(),
     unitPriceAmount: bigint('unit_price_amount', { mode: 'number' }).notNull(),
     quantity: integer('quantity').notNull(),
+    /**
+     * Units cancelled or rejected. Stored rather than derived, because unlike
+     * SHIPPED quantity there is no child table to sum - a cancellation is a
+     * fact about a line, not an object. One writer: FulfilmentService.
+     *
+     * Shipped quantity is deliberately NOT a column here. It is
+     * SUM(shipment_items.quantity), because a denormalised counter would have
+     * two writers - dispatch and cancellation - which is the drift that
+     * listings.available_stock exists to warn about.
+     */
+    cancelledQuantity: integer('cancelled_quantity').notNull().default(0),
     lineTotalAmount: bigint('line_total_amount', { mode: 'number' }).notNull(),
     /** The rate that applied on the day, so a rate change cannot restate payables. */
     commissionBps: integer('commission_bps').notNull(),
@@ -140,6 +161,10 @@ export const orderItems = pgTable(
   },
   (t) => [
     check('order_items_quantity_positive', sql`${t.quantity} > 0`),
+    check(
+      'order_items_cancelled_within_ordered',
+      sql`${t.cancelledQuantity} >= 0 AND ${t.cancelledQuantity} <= ${t.quantity}`,
+    ),
     index('order_items_tenant_idx').on(t.tenantId),
     index('order_items_order_idx').on(t.orderId),
     index('order_items_listing_idx').on(t.listingId),
