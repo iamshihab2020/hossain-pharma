@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import { captureEntries, money } from '@nexmarket/shared';
 import { LedgerService } from '../ledger/ledger.service.js';
+import { OrderEventsService } from '../fulfilment/order-events.service.js';
 import {
   PAYMENT_PROVIDERS,
   type PaymentProvider,
@@ -33,6 +34,7 @@ export class PaymentWebhookService {
   constructor(
     private readonly ledger: LedgerService,
     @Inject(PAYMENT_PROVIDERS) private readonly providers: PaymentProvider[],
+    private readonly events: OrderEventsService,
   ) {}
 
   /**
@@ -172,6 +174,17 @@ export class PaymentWebhookService {
       .update(schema.paymentIntents)
       .set({ status: 'SUCCEEDED', updatedAt: new Date() })
       .where(eq(schema.paymentIntents.id, intent.id));
+
+    // PAID on every timeline, before the status write that makes it true. The
+    // webhook runs with isAdmin, so `platform_admin_bypass` is what permits
+    // writing to another tenant's event log here.
+    for (const order of orders) {
+      await this.events.record(
+        tx,
+        { id: order.id, tenantId: order.tenantId, buyerUserId: intent.buyerUserId },
+        { type: 'PAID', actor: 'SYSTEM', actorUserId: null },
+      );
+    }
 
     await tx
       .update(schema.orders)

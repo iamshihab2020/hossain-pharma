@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { OrdersModule } from '../orders/orders.module.js';
 import { CodPaymentAdapter } from './cod.adapter.js';
 import { MockPaymentAdapter } from './mock.adapter.js';
 import { PAYMENT_PROVIDERS } from './payment-provider.port.js';
@@ -13,6 +14,7 @@ import { PaymentWebhookController } from './webhook.controller.js';
  */
 @Global()
 @Module({
+  imports: [OrdersModule],
   controllers: [PaymentWebhookController],
   providers: [
     MockPaymentAdapter,

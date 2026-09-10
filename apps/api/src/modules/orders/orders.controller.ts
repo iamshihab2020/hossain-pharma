@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { FastifyRequest } from 'fastify';
 import { RequireCapability } from '../../common/decorators/capabilities.decorator.js';
 import { parseLimit, type Page } from '../../common/pagination.js';
-import { OrdersService, type OrderView } from './orders.service.js';
+import { OrdersService, type OrderDetailView, type OrderView } from './orders.service.js';
 
 /**
  * The buyer's order history: their orders across EVERY seller, in one call.
@@ -27,7 +27,7 @@ export class BuyerOrdersController {
   }
 
   @Get(':id')
-  async get(@Req() req: FastifyRequest, @Param('id') id: string): Promise<OrderView> {
+  async get(@Req() req: FastifyRequest, @Param('id') id: string): Promise<OrderDetailView> {
     return this.orders.forBuyerOne(this.userId(req), id);
   }
 
@@ -63,7 +63,7 @@ export class SellerOrdersController {
 
   @Get(':id')
   @RequireCapability('order:read')
-  async get(@Param('id') id: string): Promise<OrderView> {
+  async get(@Param('id') id: string): Promise<OrderDetailView> {
     return this.orders.forSellerOne(id);
   }
 }

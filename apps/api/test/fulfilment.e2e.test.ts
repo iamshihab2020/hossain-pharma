@@ -920,3 +920,121 @@ describe('a seller cancels outstanding lines', () => {
     expect(res.statusCode).toBe(409);
   });
 });
+
+describe('the buyer timeline', () => {
+  type Timeline = {
+    timeline: { type: string; actor: string; payload: Record<string, unknown> }[];
+    shipments: { id: string; carrierName: string | null; items: unknown[] }[];
+    items: { id: string }[];
+  };
+
+  it('starts at placement and records every step in order', async () => {
+    const { buyer, orders } = await paidBasket('timeline');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 3 }],
+      carrierName: 'Pathao',
+      trackingNumber: 'PT-42',
+      idempotencyKey: `${NS}-timeline-1`,
+    });
+
+    const res = await asBuyer(buyer.token, 'GET', `/me/orders/${id}`);
+    expect(res.statusCode).toBe(200);
+    const body = json<Timeline>(res);
+
+    // PLACED comes from checkout and PAID from the webhook, so a timeline
+    // starts at placement rather than at the first seller action.
+    expect(body.timeline.map((e) => e.type)).toEqual([
+      'PLACED',
+      'PAID',
+      'ACCEPTED',
+      'SHIPMENT_DISPATCHED',
+    ]);
+    expect(body.timeline.map((e) => e.actor)).toEqual(['BUYER', 'SYSTEM', 'SELLER', 'SELLER']);
+  });
+
+  it('carries the carrier and tracking number in the dispatch payload', async () => {
+    const { buyer, orders } = await paidBasket('timeline-payload');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      carrierName: 'Steadfast',
+      trackingNumber: 'SF-9',
+      idempotencyKey: `${NS}-timeline-payload-1`,
+    });
+
+    const body = json<Timeline>(await asBuyer(buyer.token, 'GET', `/me/orders/${id}`));
+    const dispatched = body.timeline.find((e) => e.type === 'SHIPMENT_DISPATCHED');
+    // A timeline entry that said only SHIPPED would tell the buyer less than
+    // they already knew.
+    expect(dispatched?.payload).toMatchObject({
+      carrierName: 'Steadfast',
+      trackingNumber: 'SF-9',
+    });
+  });
+
+  it('shows the buyer their parcels', async () => {
+    const { buyer, orders } = await paidBasket('timeline-parcels');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      carrierName: 'Pathao',
+      idempotencyKey: `${NS}-timeline-parcels-1`,
+    });
+
+    const body = json<Timeline>(await asBuyer(buyer.token, 'GET', `/me/orders/${id}`));
+    expect(body.shipments).toHaveLength(1);
+    expect(body.shipments[0]?.carrierName).toBe('Pathao');
+    expect(body.shipments[0]?.items).toHaveLength(1);
+  });
+
+  it('records a cancellation on the timeline with its reason', async () => {
+    const { buyer, orders } = await paidBasket('timeline-cancel');
+    const id = orderFor(orders, alpha);
+    await asBuyer(buyer.token, 'POST', `/me/orders/${id}/cancel`, { reason: 'Ordered twice' });
+
+    const body = json<Timeline>(await asBuyer(buyer.token, 'GET', `/me/orders/${id}`));
+    const cancelled = body.timeline.find((e) => e.type === 'CANCELLED');
+    expect(cancelled?.actor).toBe('BUYER');
+    expect(cancelled?.payload).toMatchObject({ reason: 'Ordered twice' });
+  });
+
+  it('shows a seller ONLY their own half of a shared basket', async () => {
+    // The second PRD Phase 5 acceptance criterion, at the API.
+    const { orders } = await paidBasket('timeline-isolation');
+    const alphaOrder = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${alphaOrder}/accept`, {});
+
+    const mine = json<Timeline>(await asSeller(alpha, 'GET', `/seller/orders/${alphaOrder}`));
+    expect(mine.items).toHaveLength(1);
+    expect(mine.timeline.some((e) => e.type === 'ACCEPTED')).toBe(true);
+
+    // Beta's own order has its own timeline, with no trace of alpha's actions.
+    const theirs = json<Timeline>(
+      await asSeller(beta, 'GET', `/seller/orders/${orderFor(orders, beta)}`),
+    );
+    expect(theirs.timeline.some((e) => e.type === 'ACCEPTED')).toBe(false);
+    expect(theirs.items).toHaveLength(1);
+  });
+
+  it('normalises created_at to a Date rather than a string', async () => {
+    // A raw tx.execute skips Drizzle's column mapping and a timestamptz comes
+    // back as a string. The assumption survives every small test and fails on
+    // the first result set large enough to page.
+    const { orders } = await paidBasket('timeline-dates');
+    const id = orderFor(orders, alpha);
+    const body = json<{ timeline: { createdAt: string }[] }>(
+      await asSeller(alpha, 'GET', `/seller/orders/${id}`),
+    );
+    expect(Number.isNaN(Date.parse(body.timeline[0]?.createdAt ?? ''))).toBe(false);
+  });
+});

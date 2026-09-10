@@ -16,7 +16,7 @@ import { getRequestContext } from '../../common/request-context.js';
 import { asTenantScope } from '../../common/tenant-scope.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { ListingsService } from '../listings/listings.service.js';
-import { OrdersService, type OrderView } from '../orders/orders.service.js';
+import { OrdersService, type OrderDetailView } from '../orders/orders.service.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import type { CreateShipmentInput } from './dto.js';
 import { OrderEventsService, type EventActor } from './order-events.service.js';
@@ -88,7 +88,7 @@ export class FulfilmentService {
   ) {}
 
   /** The seller takes the order on. */
-  async accept(orderId: string): Promise<OrderView> {
+  async accept(orderId: string): Promise<OrderDetailView> {
     const { tx, userId } = getRequestContext();
     const order = await this.load(tx, orderId);
     this.assertAllowed(order.status, 'ACCEPTED', 'SELLER');
@@ -118,7 +118,7 @@ export class FulfilmentService {
    * buyer is owed - so it runs the same code, and only the terminal status
    * differs.
    */
-  async reject(orderId: string, reason: string): Promise<OrderView> {
+  async reject(orderId: string, reason: string): Promise<OrderDetailView> {
     const { tx, userId } = getRequestContext();
     const order = await this.load(tx, orderId);
     this.assertAllowed(order.status, 'REJECTED', 'SELLER');
@@ -330,7 +330,7 @@ export class FulfilmentService {
     orderId: string,
     picks: CancelPick[] | undefined,
     reason: string,
-  ): Promise<OrderView> {
+  ): Promise<OrderDetailView> {
     const { tx, userId } = getRequestContext();
     const order = await this.load(tx, orderId);
     assertCancellable(order.status);
@@ -371,7 +371,7 @@ export class FulfilmentService {
    * Whole-order only. A buyer wanting to drop one item of several is asking for
    * a return, which is Phase 8.
    */
-  async cancelForBuyer(orderId: string, reason: string | undefined): Promise<OrderView> {
+  async cancelForBuyer(orderId: string, reason: string | undefined): Promise<OrderDetailView> {
     const { tx, userId } = getRequestContext();
     // No tenant is selected on a buyer's request, so `own_orders` is the policy
     // that answers this - and it answers 404 for somebody else's order.

@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import { type Entry, money } from '@nexmarket/shared';
 import { asTenantScope } from '../../common/tenant-scope.js';
+import { OrderEventsService } from '../fulfilment/order-events.service.js';
 import { AddressesService } from '../addresses/addresses.service.js';
 import { CartService } from '../cart/cart.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
@@ -46,6 +47,7 @@ export class CheckoutService {
     private readonly listings: ListingsService,
     private readonly searchIndex: SearchIndexService,
     @Inject(PAYMENT_PROVIDERS) private readonly providers: PaymentProvider[],
+    private readonly events: OrderEventsService,
   ) {}
 
   /** The priced cart, for display. Same code path the confirm uses. */
@@ -271,6 +273,14 @@ export class CheckoutService {
       // reaches this call.
       const order = await asTenantScope(tx, group.sellerId, async () => {
         const inserted = await this.writeOrder(tx, group, input);
+        // The first entry on the buyer's timeline. Recorded here rather than
+        // left for the first seller action, so an order that nobody has touched
+        // still has a history rather than an empty panel.
+        await this.events.record(
+          tx,
+          { id: inserted.id, tenantId: group.sellerId, buyerUserId: input.userId },
+          { type: 'PLACED', actor: 'BUYER', actorUserId: input.userId },
+        );
         // Reserving stock and recomputing the summary belong in the SAME scope:
         // both tables are this seller's, and doing them outside it would fail
         // the tenant policy rather than silently succeed.

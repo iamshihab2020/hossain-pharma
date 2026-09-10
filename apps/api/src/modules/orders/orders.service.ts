@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import { decodeCursor, toPage, type Page } from '../../common/pagination.js';
 import { getRequestContext } from '../../common/request-context.js';
+import { OrderEventsService } from '../fulfilment/order-events.service.js';
 
 export type OrderItemView = {
   id: string;
@@ -12,6 +13,37 @@ export type OrderItemView = {
   quantity: number;
   unitPrice: { amount: number; currency: string };
   lineTotal: { amount: number; currency: string };
+};
+
+export type OrderShipmentView = {
+  id: string;
+  shipmentNumber: string;
+  status: 'DISPATCHED' | 'DELIVERED';
+  carrierName: string | null;
+  trackingNumber: string | null;
+  dispatchedAt: Date;
+  deliveredAt: Date | null;
+  items: { orderItemId: string; quantity: number }[];
+};
+
+export type OrderTimelineEntry = {
+  id: string;
+  type: string;
+  actor: string;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+};
+
+/**
+ * The DETAIL view carries parcels and history; the list does not.
+ *
+ * Deliberate: an order history page shows twenty orders, and loading every
+ * parcel and every event for each of them is three queries per row to render
+ * something no list displays. The detail page is where a buyer looks for it.
+ */
+export type OrderDetailView = OrderView & {
+  shipments: OrderShipmentView[];
+  timeline: OrderTimelineEntry[];
 };
 
 export type OrderView = {
@@ -49,6 +81,8 @@ export type OrderView = {
  */
 @Injectable()
 export class OrdersService {
+  constructor(private readonly events: OrderEventsService) {}
+
   /** The buyer's orders across every seller. No tenant, so `own_orders` rules. */
   async forBuyer(userId: string, limit: number, cursor?: string): Promise<Page<OrderView>> {
     return withTenant({ tenantId: null, userId, isAdmin: false }, (tx) =>
@@ -56,7 +90,7 @@ export class OrdersService {
     );
   }
 
-  async forBuyerOne(userId: string, id: string): Promise<OrderView> {
+  async forBuyerOne(userId: string, id: string): Promise<OrderDetailView> {
     return withTenant({ tenantId: null, userId, isAdmin: false }, (tx) => this.one(tx, id));
   }
 
@@ -68,7 +102,7 @@ export class OrdersService {
    * see uncommitted work, so a buyer cancelling an order would be handed back
    * the state from before their own cancellation.
    */
-  async oneWithin(tx: Transaction, id: string): Promise<OrderView> {
+  async oneWithin(tx: Transaction, id: string): Promise<OrderDetailView> {
     return this.one(tx, id);
   }
 
@@ -77,7 +111,7 @@ export class OrdersService {
     return this.page(getRequestContext().tx, limit, cursor);
   }
 
-  async forSellerOne(id: string): Promise<OrderView> {
+  async forSellerOne(id: string): Promise<OrderDetailView> {
     return this.one(getRequestContext().tx, id);
   }
 
@@ -133,7 +167,7 @@ export class OrdersService {
     };
   }
 
-  private async one(tx: Transaction, id: string): Promise<OrderView> {
+  private async one(tx: Transaction, id: string): Promise<OrderDetailView> {
     const rows = await tx
       .select({
         id: schema.orders.id,
@@ -160,7 +194,57 @@ export class OrdersService {
     if (row === undefined) throw new NotFoundException('No such order');
 
     const items = await this.withItems(tx, [row.id]);
-    return toOrder(row, items.get(row.id) ?? []);
+    const [shipments, timeline] = await Promise.all([
+      this.shipmentsFor(tx, row.id),
+      this.events.forOrder(tx, row.id),
+    ]);
+
+    return { ...toOrder(row, items.get(row.id) ?? []), shipments, timeline };
+  }
+
+  /**
+   * The parcels on one order.
+   *
+   * No `WHERE tenant_id` and no buyer filter, for the reason this whole service
+   * gives: `shipments` and `shipment_items` carry policies, and an application
+   * filter would answer correctly while masking a policy regression. A seller
+   * sees their own parcels through `tenant_isolation`; a buyer sees all of
+   * theirs through `own_shipments`.
+   */
+  private async shipmentsFor(tx: Transaction, orderId: string): Promise<OrderShipmentView[]> {
+    const rows = await tx
+      .select()
+      .from(schema.shipments)
+      .where(eq(schema.shipments.orderId, orderId))
+      .orderBy(schema.shipments.dispatchedAt, schema.shipments.id);
+    if (rows.length === 0) return [];
+
+    const lines = await tx
+      .select({
+        shipmentId: schema.shipmentItems.shipmentId,
+        orderItemId: schema.shipmentItems.orderItemId,
+        quantity: schema.shipmentItems.quantity,
+      })
+      .from(schema.shipmentItems)
+      .where(
+        inArray(
+          schema.shipmentItems.shipmentId,
+          rows.map((row) => row.id),
+        ),
+      );
+
+    return rows.map((row) => ({
+      id: row.id,
+      shipmentNumber: row.shipmentNumber,
+      status: row.status,
+      carrierName: row.carrierName,
+      trackingNumber: row.trackingNumber,
+      dispatchedAt: row.dispatchedAt,
+      deliveredAt: row.deliveredAt,
+      items: lines
+        .filter((line) => line.shipmentId === row.id)
+        .map((line) => ({ orderItemId: line.orderItemId, quantity: line.quantity })),
+    }));
   }
 
   /**

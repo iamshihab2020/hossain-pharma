@@ -3,7 +3,6 @@ import { ListingsModule } from '../listings/listings.module.js';
 import { OrdersModule } from '../orders/orders.module.js';
 import { BuyerFulfilmentController, SellerFulfilmentController } from './fulfilment.controller.js';
 import { FulfilmentService } from './fulfilment.service.js';
-import { OrderEventsService } from './order-events.service.js';
 
 /**
  * LedgerModule and SearchModule are @Global, so only the two that are not get
@@ -14,7 +13,7 @@ import { OrderEventsService } from './order-events.service.js';
 @Module({
   imports: [ListingsModule, OrdersModule],
   controllers: [SellerFulfilmentController, BuyerFulfilmentController],
-  providers: [FulfilmentService, OrderEventsService],
-  exports: [FulfilmentService, OrderEventsService],
+  providers: [FulfilmentService],
+  exports: [FulfilmentService],
 })
 export class FulfilmentModule {}

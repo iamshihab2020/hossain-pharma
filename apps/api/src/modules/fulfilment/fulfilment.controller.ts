@@ -2,7 +2,7 @@ import { Body, Controller, HttpCode, Param, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { ApiTags } from '@nestjs/swagger';
 import { RequireCapability } from '../../common/decorators/capabilities.decorator.js';
-import type { OrderView } from '../orders/orders.service.js';
+import type { OrderDetailView } from '../orders/orders.service.js';
 import { parseBuyerCancel, parseCreateShipment, parseReject, parseSellerCancel } from './dto.js';
 import { FulfilmentService, type ShipmentView } from './fulfilment.service.js';
 
@@ -28,14 +28,14 @@ export class SellerFulfilmentController {
   @Post('accept')
   @HttpCode(200)
   @RequireCapability('order:write')
-  async accept(@Param('id') id: string): Promise<OrderView> {
+  async accept(@Param('id') id: string): Promise<OrderDetailView> {
     return this.fulfilment.accept(id);
   }
 
   @Post('reject')
   @HttpCode(200)
   @RequireCapability('order:write')
-  async reject(@Param('id') id: string, @Body() body: unknown): Promise<OrderView> {
+  async reject(@Param('id') id: string, @Body() body: unknown): Promise<OrderDetailView> {
     return this.fulfilment.reject(id, parseReject(body).reason);
   }
 
@@ -72,7 +72,7 @@ export class SellerFulfilmentController {
   @Post('cancel')
   @HttpCode(200)
   @RequireCapability('order:write')
-  async cancel(@Param('id') id: string, @Body() body: unknown): Promise<OrderView> {
+  async cancel(@Param('id') id: string, @Body() body: unknown): Promise<OrderDetailView> {
     const input = parseSellerCancel(body);
     return this.fulfilment.cancelLinesForSeller(id, input.items, input.reason);
   }
@@ -94,7 +94,7 @@ export class BuyerFulfilmentController {
 
   @Post('cancel')
   @HttpCode(200)
-  async cancel(@Param('id') id: string, @Body() body: unknown): Promise<OrderView> {
+  async cancel(@Param('id') id: string, @Body() body: unknown): Promise<OrderDetailView> {
     return this.fulfilment.cancelForBuyer(id, parseBuyerCancel(body).reason);
   }
 }
