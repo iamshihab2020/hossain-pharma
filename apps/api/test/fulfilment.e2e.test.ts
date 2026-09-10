@@ -4,6 +4,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { sql } from 'drizzle-orm';
 import { schema, upsertSearchDocument, withTenant } from '@nexmarket/db';
+import { orderDetailSchema, shipmentViewSchema } from '@nexmarket/api-client';
 import type { LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
@@ -1036,5 +1037,107 @@ describe('the buyer timeline', () => {
       await asSeller(alpha, 'GET', `/seller/orders/${id}`),
     );
     expect(Number.isNaN(Date.parse(body.timeline[0]?.createdAt ?? ''))).toBe(false);
+  });
+});
+
+/**
+ * THE PUBLISHED CONTRACT, ASSERTED AGAINST THE REAL SERVER.
+ *
+ * `@nexmarket/api-client` declares the shape the storefront and the seller
+ * console parse through, and that only means something if something checks the
+ * schemas describe THIS server. Otherwise the package is a hand-written mirror
+ * with extra steps, drifting exactly like the file it replaced.
+ *
+ * Asserted here rather than in `contract.e2e` because the fixture is here: a
+ * dispatched parcel on a paid order needs the whole machine, and a contract
+ * test that has to skip when its fixture is missing is a test that passes
+ * without asserting anything.
+ *
+ * `.parse()` rather than `.safeParse()`: zod names the exact path that broke.
+ */
+describe('the published contract', () => {
+  it('an order detail matches orderDetailSchema, timeline and parcels included', async () => {
+    const { buyer, orders } = await paidBasket('contract-order');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      carrierName: 'Pathao',
+      trackingNumber: 'PT-CONTRACT',
+      idempotencyKey: `${NS}-contract-1`,
+    });
+
+    // The buyer's view and the seller's view are the SAME shape. Two shapes for
+    // one order is how a console and a storefront start disagreeing.
+    const asBuyerRes = await asBuyer(buyer.token, 'GET', `/me/orders/${id}`);
+    const buyerOrder = orderDetailSchema.parse(asBuyerRes.json());
+    expect(buyerOrder.shipments).toHaveLength(1);
+    expect(buyerOrder.timeline.length).toBeGreaterThan(0);
+
+    const sellerRes = await asSeller(alpha, 'GET', `/seller/orders/${id}`);
+    orderDetailSchema.parse(sellerRes.json());
+  });
+
+  it('a dispatch response matches shipmentViewSchema', async () => {
+    const { orders } = await paidBasket('contract-shipment');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-contract-2`,
+    });
+    const parcel = shipmentViewSchema.parse(res.json());
+
+    // Nullable, not absent. A missing field would make "was there a carrier?"
+    // undefined rather than no.
+    expect(parcel.carrierName).toBeNull();
+    expect(parcel.deliveredAt).toBeNull();
+    expect(parcel.status).toBe('DISPATCHED');
+  });
+
+  it('every Phase 5 status the machine can reach is one the client knows', async () => {
+    // The enum in the client is a copy of the enum in the database, and a copy
+    // is a thing that drifts. Walk an order through the whole lifecycle and
+    // parse at each step, so a status the client has never heard of fails here.
+    const { orders } = await paidBasket('contract-states');
+    const id = orderFor(orders, alpha);
+
+    const seen: string[] = [];
+    const record = (res: LightMyRequestResponse) => {
+      seen.push(orderDetailSchema.parse(res.json()).status);
+    };
+
+    record(await asSeller(alpha, 'GET', `/seller/orders/${id}`));
+    record(await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {}));
+
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-contract-3`,
+    });
+    record(await asSeller(alpha, 'GET', `/seller/orders/${id}`));
+
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      idempotencyKey: `${NS}-contract-4`,
+    });
+    record(await asSeller(alpha, 'GET', `/seller/orders/${id}`));
+
+    await asSeller(
+      alpha,
+      'POST',
+      `/seller/orders/${id}/shipments/${json<{ id: string }>(parcel).id}/delivered`,
+      {},
+    );
+    const first = await asSeller(alpha, 'GET', `/seller/orders/${id}`);
+    record(first);
+
+    expect(seen).toEqual(['PAID', 'ACCEPTED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'SHIPPED']);
   });
 });
