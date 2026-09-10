@@ -11,6 +11,7 @@ import { CartModule } from './modules/cart/cart.module.js';
 import { CheckoutModule } from './modules/checkout/checkout.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { CatalogueModule } from './modules/catalogue/catalogue.module.js';
+import { FulfilmentModule } from './modules/fulfilment/fulfilment.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { LedgerModule } from './modules/ledger/ledger.module.js';
 import { ListingsModule } from './modules/listings/listings.module.js';
@@ -49,6 +50,7 @@ import { SearchModule } from './modules/search/search.module.js';
     CheckoutModule,
     AuthModule,
     CatalogueModule,
+    FulfilmentModule,
     HealthModule,
     LedgerModule,
     ListingsModule,
