@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import { type Transaction, schema, withTenant } from '@nexmarket/db';
-import { captureEntries, money, type SellerSplit } from '@nexmarket/shared';
+import { captureEntries, money } from '@nexmarket/shared';
 import { LedgerService } from '../ledger/ledger.service.js';
 import {
   PAYMENT_PROVIDERS,
@@ -157,19 +157,15 @@ export class PaymentWebhookService {
       return;
     }
 
-    const splits: SellerSplit[] = orders.map((order) => ({
-      orgId: order.tenantId,
-      gross: money(order.total, intent.currency),
-      // Recomputed from the SNAPSHOTTED rate on the order, never from today's
-      // rate table: a commission change next month must not restate what was
-      // owed on an order placed last month.
-      commission: money(order.commission, intent.currency),
-    }));
+    // One capture posts ONE pair of entries: the buyer owes, and the money
+    // lands in clearing. Attributing it to sellers is dispatch's job now - see
+    // releaseEntries - because a seller who has not shipped is not owed.
+    const total = orders.reduce((sum, order) => sum + order.total, 0);
 
     await this.ledger.post(tx, {
       paymentIntentId: intent.id,
       kind: 'CAPTURE',
-      entries: captureEntries(splits),
+      entries: captureEntries(money(total, intent.currency)),
     });
 
     await tx

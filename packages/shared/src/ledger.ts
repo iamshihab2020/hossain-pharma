@@ -1,4 +1,4 @@
-import { type Money, add, money, subtract } from './money.js';
+import { type Money, add, money } from './money.js';
 
 /**
  * The double-entry ledger's rules, as pure functions.
@@ -113,65 +113,39 @@ export function assertBalanced(entries: readonly Entry[]): void {
   }
 }
 
-export type SellerSplit = {
-  readonly orgId: string;
-  /** What the buyer pays this seller, before commission. */
-  readonly gross: Money;
-  /** The platform's cut of `gross`. */
-  readonly commission: Money;
-};
-
 /**
- * The PRD 10.1 worked example, generalised: one buyer payment split across N
- * sellers with a per-seller commission.
+ * A capture, after Phase 5: the buyer owes, and the money lands in clearing.
  *
  *     DR  buyer_receivable          1000
  *     CR  platform_clearing               1000
- *     DR  platform_clearing          600
- *     CR  seller_payable:acme               540
- *     CR  platform_revenue:commission        60
- *     ...
+ *
+ * It used to credit each seller's payable here, and it does not any more. The
+ * reason is the one clearing was always for - "money received but not yet
+ * attributed". DISPATCH is the attribution; see `releaseEntries` in
+ * fulfilment.ts. A seller who has not shipped is not owed, and a ledger that
+ * said otherwise overstated every payable between capture and dispatch.
+ *
+ * This also makes card and COD identical from here on. COD_ACCRUAL already
+ * posted only a receivable and a clearing credit (ADR 0016 decision 5), so both
+ * methods now leave the seller's gross in the same place and release it through
+ * the same code path - which is what will let Phase 6's COD collection be a
+ * posting against COD_RECEIVABLE and nothing else.
  *
  * The clearing account is not decoration. Without it the buyer's single
  * receivable would have to be credited in N pieces, and the moment a refund or
  * a partial capture arrives there is no row representing "money received but
- * not yet attributed" - which is exactly the state COD spends days in.
+ * not yet attributed" - which is exactly the state COD spends days in, and now
+ * also the state every card order spends between payment and dispatch.
  */
-export function captureEntries(splits: readonly SellerSplit[]): Entry[] {
-  if (splits.length === 0) {
-    throw new RangeError('A capture needs at least one seller split');
-  }
-
-  const [first, ...rest] = splits as [SellerSplit, ...SellerSplit[]];
-  let total = first.gross;
-  for (const split of rest) {
-    total = add(total, split.gross);
+export function captureEntries(total: Money): Entry[] {
+  if (total.amount === 0) {
+    throw new RangeError('A capture of zero is always a bug');
   }
 
   const entries: Entry[] = [
     { kind: 'BUYER_RECEIVABLE', ownerOrgId: null, amount: total },
     { kind: 'PLATFORM_CLEARING', ownerOrgId: null, amount: negate(total) },
   ];
-
-  for (const split of splits) {
-    const payable = subtract(split.gross, split.commission);
-    if (payable.amount < 0) {
-      throw new RangeError(
-        `Commission ${split.commission.amount} exceeds gross ${split.gross.amount} for organisation ${split.orgId}`,
-      );
-    }
-    entries.push({ kind: 'PLATFORM_CLEARING', ownerOrgId: null, amount: split.gross });
-    if (payable.amount !== 0) {
-      entries.push({ kind: 'SELLER_PAYABLE', ownerOrgId: split.orgId, amount: negate(payable) });
-    }
-    if (split.commission.amount !== 0) {
-      entries.push({
-        kind: 'PLATFORM_REVENUE_COMMISSION',
-        ownerOrgId: null,
-        amount: negate(split.commission),
-      });
-    }
-  }
 
   assertBalanced(entries);
   return entries;

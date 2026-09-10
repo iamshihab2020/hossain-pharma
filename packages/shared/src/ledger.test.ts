@@ -7,6 +7,7 @@ import {
   captureEntries,
   requiresOwner,
 } from './ledger.js';
+import { releaseEntries } from './fulfilment.js';
 import { CurrencyMismatchError, money } from './money.js';
 
 const bdt = (amount: number) => money(amount, 'BDT');
@@ -96,8 +97,8 @@ describe('assertBalanced', () => {
 
 describe('captureEntries', () => {
   /**
-   * PRD 10.1's worked example, asserted line for line. If this test is edited to
-   * match the code, the code is wrong - these numbers are the specification.
+   * PRD 10.1's worked example, asserted line for line and STILL the
+   * specification. If this test is edited to match the code, the code is wrong.
    *
    *   DR  buyer_receivable          1000
    *   CR  platform_clearing               1000
@@ -107,12 +108,19 @@ describe('captureEntries', () => {
    *   DR  platform_clearing          400
    *   CR  seller_payable:beta               360
    *   CR  platform_revenue:commission        40
+   *
+   * What Phase 5 changed is WHEN those lines post, never what they are. The
+   * capture posts the first two - the buyer owes, and the money lands in
+   * clearing - and each seller's three post on DISPATCH, because a seller who
+   * has not shipped is not owed. Assembled, the example is unchanged, which is
+   * the point of asserting it this way rather than deleting it.
    */
-  it('reproduces the PRD 10.1 worked example exactly', () => {
-    const entries = captureEntries([
-      { orgId: ACME, gross: bdt(600), commission: bdt(60) },
-      { orgId: BETA, gross: bdt(400), commission: bdt(40) },
-    ]);
+  it('reproduces the PRD 10.1 worked example exactly, across capture and dispatch', () => {
+    const entries = [
+      ...captureEntries(bdt(1000)),
+      ...releaseEntries(ACME, { total: bdt(600), commission: bdt(60) }),
+      ...releaseEntries(BETA, { total: bdt(400), commission: bdt(40) }),
+    ];
 
     expect(entries).toEqual<Entry[]>([
       { kind: 'BUYER_RECEIVABLE', ownerOrgId: null, amount: bdt(1000) },
@@ -126,36 +134,26 @@ describe('captureEntries', () => {
     ]);
   });
 
-  it('balances for a single seller', () => {
-    const entries = captureEntries([{ orgId: ACME, gross: bdt(4200), commission: bdt(420) }]);
+  it('parks the whole payment in clearing and balances', () => {
+    const entries = captureEntries(bdt(1000));
+    expect(entries).toHaveLength(2);
     expect(sum(entries)).toBe(0);
   });
 
-  it('omits the commission entry entirely at zero commission rather than posting zero', () => {
-    const entries = captureEntries([{ orgId: ACME, gross: bdt(500), commission: bdt(0) }]);
-    expect(entries.some((e) => e.kind === 'PLATFORM_REVENUE_COMMISSION')).toBe(false);
-    expect(sum(entries)).toBe(0);
-  });
-
-  it('omits the payable entry when commission takes the whole gross', () => {
-    const entries = captureEntries([{ orgId: ACME, gross: bdt(500), commission: bdt(500) }]);
+  it('credits no seller, because nothing has shipped', () => {
+    const entries = captureEntries(bdt(1000));
     expect(entries.some((e) => e.kind === 'SELLER_PAYABLE')).toBe(false);
-    expect(sum(entries)).toBe(0);
+    expect(entries.some((e) => e.kind === 'PLATFORM_REVENUE_COMMISSION')).toBe(false);
   });
 
-  it('rejects commission exceeding gross, naming the organisation', () => {
-    expect(() =>
-      captureEntries([{ orgId: ACME, gross: bdt(100), commission: bdt(101) }]),
-    ).toThrow(new RegExp(ACME));
-  });
-
-  it('rejects a capture with no sellers', () => {
-    expect(() => captureEntries([])).toThrow(RangeError);
+  it('rejects a capture of zero', () => {
+    expect(() => captureEntries(bdt(0))).toThrow(RangeError);
   });
 
   /**
-   * The property that matters: whatever the split, the books balance and the
-   * money is fully attributed. 500 pseudo-random cases with a fixed seed, so a
+   * The property that matters, and it now spans both halves: whatever the
+   * split, the books balance and the money is FULLY attributed once every
+   * seller has dispatched. 500 pseudo-random cases with a fixed seed, so a
    * failure is reproducible rather than a one-off red build.
    */
   it('balances and attributes fully across 500 random splits', () => {
@@ -177,7 +175,11 @@ describe('captureEntries', () => {
         };
       });
 
-      const entries = captureEntries(splits);
+      const total = splits.reduce((n, s) => n + s.gross.amount, 0);
+      const entries = [
+        ...captureEntries(bdt(total)),
+        ...splits.flatMap((s) => releaseEntries(s.orgId, { total: s.gross, commission: s.commission })),
+      ];
       expect(sum(entries)).toBe(0);
 
       const receivable = totalFor(entries, 'BUYER_RECEIVABLE');
