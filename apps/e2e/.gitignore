@@ -1,0 +1,6 @@
+# Playwright's own output. Traces and screenshots are written only when a test
+# fails, and a green run leaves nothing behind - but a red one should not put
+# a binary in a commit.
+test-results/
+playwright-report/
+blob-report/
