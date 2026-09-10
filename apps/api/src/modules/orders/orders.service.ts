@@ -42,6 +42,14 @@ export type OrderTimelineEntry = {
  * something no list displays. The detail page is where a buyer looks for it.
  */
 export type OrderDetailView = OrderView & {
+  /**
+   * The address SNAPSHOT taken when the order was placed, not a foreign key.
+   *
+   * On the detail view only. A packing slip is unusable without it, and the
+   * list has no business carrying every buyer's address into a page that shows
+   * twenty orders at once.
+   */
+  shippingAddress: Record<string, unknown>;
   shipments: OrderShipmentView[];
   timeline: OrderTimelineEntry[];
 };
@@ -182,6 +190,7 @@ export class OrdersService {
         totalAmount: schema.orders.totalAmount,
         currency: schema.orders.currency,
         placedAt: schema.orders.placedAt,
+        shippingAddress: schema.orders.shippingAddress,
       })
       .from(schema.orders)
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.orders.tenantId))
@@ -199,7 +208,12 @@ export class OrdersService {
       this.events.forOrder(tx, row.id),
     ]);
 
-    return { ...toOrder(row, items.get(row.id) ?? []), shipments, timeline };
+    return {
+      ...toOrder(row, items.get(row.id) ?? []),
+      shippingAddress: (row.shippingAddress ?? {}) as Record<string, unknown>,
+      shipments,
+      timeline,
+    };
   }
 
   /**

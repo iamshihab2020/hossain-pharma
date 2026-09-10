@@ -2,50 +2,120 @@
 @tailwind components;
 @tailwind utilities;
 
+/**
+ * The NexMarket palette. See docs/DESIGN-DIRECTION.md for why each value is
+ * what it is; the short version:
+ *
+ *   - Petrol green rather than orange. Every marketplace in this category is
+ *     orange, and in Bangladesh bKash, Nagad and Rocket already own magenta,
+ *     orange and purple.
+ *   - Neutrals are shifted toward the accent (hue ~150-170) rather than taken
+ *     off the shelf, so the greys belong to the palette instead of sitting
+ *     beside it.
+ *   - COLOUR IS INFORMATION. There is no decorative accent anywhere in this
+ *     system: `primary` marks an action or a buy-box winner, `warn` marks a
+ *     risk. If something is coloured, the colour means something.
+ *
+ * Both themes are designed sets. The dark palette is not the light one
+ * inverted, and every token below is defined in BOTH blocks - a token that
+ * exists in only one renders as a broken colour in the other and is invisible
+ * to type-check.
+ */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 150 7% 94%;
+    --foreground: 170 41% 9%;
+
+    /* Surfaces sit ABOVE the ground, which is what separates them. Shadows are
+       reserved for the mobile buy bar and dialogs. */
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 170 41% 9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 193 91% 48%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 193 91% 48%;
-    --radius: 0.5rem;
+    --popover-foreground: 170 41% 9%;
+
+    --primary: 175 80% 20%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 155 10% 90%;
+    --secondary-foreground: 170 41% 9%;
+
+    --muted: 155 10% 90%;
+    --muted-foreground: 169 8% 39%;
+
+    --accent: 155 12% 88%;
+    --accent-foreground: 170 41% 9%;
+
+    --destructive: 358 62% 41%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 155 10% 86%;
+    --input: 155 10% 86%;
+    --ring: 175 80% 20%;
+
+    /* 6px. Radius is spent by role: 0 on table rows, this on controls, and
+       `--radius-tile` on product tiles. One radius on everything flattens the
+       hierarchy it should be encoding. */
+    --radius: 0.375rem;
+    --radius-tile: 0.625rem;
+
+    /* ---- marketplace tokens ---------------------------------------------- */
+
+    /* The buy-box winner's row, and nothing else. */
+    --wash: 165 28% 91%;
+    /* Below the ground: table headers, inset panels. */
+    --sunk: 155 9% 89%;
+    /* A line that has to carry weight - a table's header rule. */
+    --line-strong: 155 11% 73%;
+
+    /* The ONLY warm colour in the system, and it never means "sale". Low
+       stock, a price that moved, a payment not yet collected. */
+    --warn: 36 100% 27%;
+    --warn-wash: 38 45% 92%;
+
+    /* Reserved for states a seller or an order can be in - not for emphasis. */
+    --success: 168 70% 24%;
+    --success-wash: 165 30% 91%;
+    --verified: 175 80% 20%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 193 91% 48%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 193 91% 48%;
+    --background: 171 23% 5%;
+    --foreground: 161 17% 92%;
+
+    --card: 164 18% 9%;
+    --card-foreground: 161 17% 92%;
+    --popover: 164 18% 9%;
+    --popover-foreground: 161 17% 92%;
+
+    --primary: 170 47% 58%;
+    --primary-foreground: 172 70% 8%;
+
+    --secondary: 160 14% 14%;
+    --secondary-foreground: 161 17% 92%;
+
+    --muted: 160 14% 14%;
+    --muted-foreground: 167 9% 61%;
+
+    --accent: 158 15% 17%;
+    --accent-foreground: 161 17% 92%;
+
+    --destructive: 358 55% 52%;
+    --destructive-foreground: 172 70% 8%;
+
+    --border: 150 17% 16%;
+    --input: 150 17% 16%;
+    --ring: 170 47% 58%;
+
+    --wash: 168 34% 13%;
+    --sunk: 168 22% 7%;
+    --line-strong: 155 14% 27%;
+
+    --warn: 35 61% 60%;
+    --warn-wash: 36 26% 13%;
+
+    --success: 168 45% 55%;
+    --success-wash: 168 30% 13%;
+    --verified: 170 47% 58%;
   }
 }
 
@@ -53,7 +123,46 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
+    /* Bengali sits alongside Latin at a matched x-height rather than falling
+       back to a system face mid-sentence. Both are loaded by next/font in the
+       root layout, which sets these variables. */
+    font-family: var(--font-sans), var(--font-bengali), system-ui, sans-serif;
+  }
+
+  /**
+   * Digits line up in columns everywhere in a marketplace - a comparison table
+   * that does not is unscannable. Applied by default rather than per-component,
+   * because the failure is silent and easy to forget on the one table that
+   * matters.
+   */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /**
+   * Seller photography is mostly white cut-outs and glares on a dark ground.
+   * Without this the catalogue is unusable at night, which is when a good deal
+   * of this market shops.
+   */
+  .dark .product-image {
+    filter: brightness(0.92);
+  }
+
+  /* A visible focus ring in both themes, on everything, not only buttons. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

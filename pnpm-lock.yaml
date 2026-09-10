@@ -87,6 +87,9 @@ importers:
       '@nestjs/testing':
         specifier: ^11.2.1
         version: 11.2.1(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.1(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
+      '@nexmarket/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@nexmarket/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -108,6 +111,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@nexmarket/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@radix-ui/react-accordion':
         specifier: ^1.2.20
         version: 1.2.20(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -195,6 +201,9 @@ importers:
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@nexmarket/config':
         specifier: workspace:*
@@ -223,6 +232,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.2.0)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   apps/worker:
     dependencies:
@@ -242,6 +254,19 @@ importers:
       tsx:
         specifier: ^4.23.12
         version: 4.23.12
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.2.0)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/api-client:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@nexmarket/config':
+        specifier: workspace:*
+        version: link:../config
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.2.0)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))

@@ -7,7 +7,7 @@ Any verified seller lists anything. Buyers search across all of them, compare co
 
 ---
 
-## Status: Phases 0-4 complete, Phase 5 not started
+## Status: Phases 0-5 complete, Phase 6 not started
 
 **What runs today:** a monorepo, a database with tenant isolation proven under concurrent load at both the query layer and over HTTP, an idempotent seed, and three applications that build and start — plus the whole of identity and tenancy. Registration and login (argon2id), refresh-token rotation with reuse detection, Google OAuth, a capability matrix, a globally-registered auth guard and tenant interceptor, seller onboarding with document upload, and a cursor-paginated admin approval queue.
 
@@ -17,7 +17,9 @@ Phase 3 added discovery: a materialised search index, weighted full-text search 
 
 Phase 4 added commerce: a server-authoritative cart spanning many sellers with a guest cart that merges on login, an address book, a quote pipeline behind a `ShippingQuoteProvider` port, an age gate for restricted categories, a `PaymentProvider` port with **mock and cash-on-delivery** adapters, and a **double-entry ledger** whose balance invariant is enforced three times over.
 
-**What does not exist yet:** fulfilment and shipments, logistics and zones, reviews, returns. Those are Phases 5 through 8. `packages/api-client` is still not generated — there is an API surface worth generating from, and it has not fitted into a phase yet.
+Phase 5 added fulfilment: an order state machine whose status is COMPUTED from line coverage rather than set, seller accept/reject, **partial shipments** with carrier and tracking, per-parcel release of the seller's payable, buyer and seller cancellation with a ledger reversal, an append-only **order event log** behind the buyer's timeline, and printable packing slips and invoices. A seller's money now moves on **dispatch** rather than at capture, allocated per unit so two parcels sum exactly to what one capture would have paid.
+
+**What does not exist yet:** logistics and zones, reviews, returns. Those are Phases 6 through 8. `packages/api-client` is still not generated — there is an API surface worth generating from, and it has not fitted into a phase yet.
 
 This section is kept accurate deliberately. A README that overstates what is built is the specific failure this project is a reaction to — see [`OVERVIEW.md`](./OVERVIEW.md), where all three of the previous READMEs described software that did not exist.
 
@@ -39,7 +41,7 @@ cp .env.example .env
 pnpm install
 docker compose up -d      # Postgres on 5433, Redis on 6380
 pnpm db:push              # migrations, including RLS policies and grants
-pnpm seed                 # 8 seller orgs, 5 users, 11 categories, 3 products, 4 listings
+pnpm seed                 # 12 seller orgs, 5 users, 11 categories, 11 products, 26 listings
 pnpm dev                  # api :4000 · web :3000 · worker
 ```
 

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository directory is still `hossain-pharma` and the git history begins as a pharmacy project. That is historical. **Pharmacy is not a vertical here** and prescription medicine is explicitly out of scope — do not reintroduce health framing into naming, seed data, or copy. Names inside `archive/` are left alone on purpose.
 
-Work is organised into 13 phases. **Phases 0-4 are complete; Phases 5-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
+Work is organised into 13 phases. **Phases 0-5 are complete; Phases 6-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
 
 ## Commands
 
@@ -17,7 +17,8 @@ cp .env.example .env
 pnpm install
 docker compose up -d          # Postgres on 5433, Redis on 6380 (NOT the defaults)
 pnpm db:push                  # runs migrations; see "db:push is a lie" below
-pnpm seed                     # idempotent (8 orgs, 5 users, 11 categories, 3 products, 4 listings)
+pnpm seed                     # idempotent; 12 orgs, 5 users, 11 categories, 11 products, 26 listings
+                              # (8 orgs + the acceptance fixtures, then the demo market in seed/demo.ts)
 pnpm dev                      # api :4000 · web :3000 · worker
 ```
 
@@ -71,8 +72,8 @@ and that is a decision rather than an omission (there is a test asserting it). S
 whole catalogue — `categories`, `products`, `product_variants`, `product_media`,
 `product_attributes` — because a catalogue entry shared by competing sellers is the point
 of PRD 8.3. The tenant-owned tables are `org_members`, `seller_documents`, `listings`,
-`inventory_items`, `warehouses`, `orders`, `order_items` and the `rls_probe`
-canary. The Phase 4 commerce tables split three ways and each way is a decision:
+`inventory_items`, `warehouses`, `orders`, `order_items`, `shipments`,
+`shipment_items`, `order_events` and the `rls_probe` canary. The Phase 4 commerce tables split three ways and each way is a decision:
 `carts`, `cart_items` and `addresses` are platform-owned and user-scoped in the
 service (a cart spans sellers by definition); `ledger_accounts`,
 `ledger_entries`, `transactions`, `payment_intents` and `payment_events` are
@@ -143,17 +144,20 @@ new controller with no decorators is closed and tenant-scoped. Opting out is `@P
   and a caller typo becomes a 500.
 - Capabilities are declared with `@RequireCapability('member:write')`. **Never read a
   role name.** ADR 0013.
-- **Three places move `app.tenant_id` outside `withTenant`**, all in
+- **Four places move `app.tenant_id` outside `withTenant`**, all in
   `common/tenant-scope.ts`: founding an organisation, reindexing search (a cross-tenant
-  aggregate), and placing an order at checkout (a buyer writing to four tenant-owned
-  tables across several sellers). All are transaction-local and restore in a `finally`.
-  Before adding a fourth, ask whether the work is genuinely not tenant-scoped or is
+  aggregate), placing an order at checkout (a buyer writing to four tenant-owned
+  tables across several sellers), and CANCELLING one (the same buyer, one seller -
+  ADR 0019). All are transaction-local and restore in a `finally`.
+  Before adding a fifth, ask whether the work is genuinely not tenant-scoped or is
   tenant-scoped work being done from the wrong place - it has been the second more often,
-  and Phase 4 rejected a fourth on exactly those grounds: the ledger looked like it needed
+  and Phase 4 rejected one on exactly those grounds: the ledger looked like it needed
   one and turned out to be platform-owned instead (ADR 0016).
 - **A write that changes what a buyer would FIND must reindex.** `SearchIndexService` is
   the only writer of `search_documents`; the hooks live in the listings, catalogue-admin,
-  org-governance and checkout services. Suspending a seller is the least obvious one and
+  org-governance, checkout and fulfilment services. Cancelling lines puts stock back and
+  must reindex; DISPATCH deliberately must not, because `on_hand` and `reserved` fall
+  together and `available` is unchanged. Suspending a seller is the least obvious one and
   **placing an order** is the second - buying the last unit flips `in_stock`. Checkout must
   also call `ListingsService.recomputeAvailableStock` rather than writing
   `listings.available_stock` itself: that column has one documented writer, and a
@@ -201,10 +205,11 @@ recreating the database.
 
 `type Money = { amount: number; currency: string }` where `amount` is **integer minor
 units**. No floats in any pricing, tax, discount, shipping or ledger path. Use the
-helpers in `@nexmarket/shared`. `allocate()` splits one amount across sellers without
-losing a unit — it is **not** used yet: per-seller subtotals and percentage commission sum
-exactly by construction. It earns its place at the first cart-level amount that gets
-split, which is a promotion (Phase 9) or a partial refund (Phase 8).
+helpers in `@nexmarket/shared`. `allocate()` splits one amount across parts without
+losing a unit. Phase 4 predicted it would earn its place at a promotion (Phase 9) or a
+partial refund (Phase 8); **a partial shipment got there first** (ADR 0020). A parcel
+carries units, not a fraction, and recomputing its share as a fresh percentage overpays
+at every rounding boundary without failing anything.
 
 The legacy server did `parseInt(price * 100)`, which truncates. That bug is what this
 module exists to make unrepresentable.
@@ -254,8 +259,14 @@ projects on this machine bind 5432/6379. Container-internal ports are standard.
   `apps/web/node_modules/next/dist/docs/`. Read those rather than relying on Next 15 habits.
 - `apps/web/AGENTS.md` and `apps/web/CLAUDE.md` are generated and re-added by `next dev`.
   They are committed deliberately; deleting them only recreates an uncommitted change.
+- **`apps/web` tests run in the NODE environment** - no jsdom, no browser runner, no
+  snapshots. Server components cannot be meaningfully driven by a DOM testing library, so
+  what gets tested is the pure view helpers in `lib/` and the server actions' input
+  parsing; behaviour lives in the API's e2e suite. Settled in Phase 5; the reasoning is
+  in `apps/web/lib/order-timeline.test.ts`.
 - Test coverage thresholds are enforced at 100% on `money.ts`, `capabilities.ts`,
-  `buy-box.ts`, `tenant-context.ts` and `assert-driver.ts`. If one fails, add the missing test rather
+  `buy-box.ts`, `order-state.ts`, `fulfilment.ts`, `tenant-context.ts` and
+  `assert-driver.ts`. If one fails, add the missing test rather
   than lowering the threshold.
 - **Never mutate seeded users or organisations in a test.** Granting
   `tanvir@acme.test` a role in one file changed what he could do in another, which passed

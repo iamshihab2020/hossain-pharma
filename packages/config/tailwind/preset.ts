@@ -10,6 +10,10 @@ import type { Config } from 'tailwindcss';
  * `@nexmarket/config/tailwind/globals.css`. Both files travel together or neither
  * works: a token here with no matching CSS variable renders as a broken colour
  * at runtime and is invisible to type-check.
+ *
+ * The palette itself is documented in `docs/DESIGN-DIRECTION.md`. The rule that
+ * matters when adding to this file: COLOUR IS INFORMATION. There is no
+ * decorative accent in this system, so a new colour needs a meaning, not a mood.
  */
 // Annotated rather than `satisfies`. Tailwind types darkMode as
 // Partial<DarkModeConfig>, whose tuple members only match when the array
@@ -54,33 +58,53 @@ const preset: Partial<Omit<Config, 'content'>> = {
           foreground: 'hsl(var(--card-foreground))',
         },
 
-        // Semantic status colours. Used by order state, stock level, and
-        // moderation badges across buyer, seller and admin surfaces.
+        // ---- marketplace tokens -------------------------------------------
+        //
+        // These resolve through CSS variables like everything above, so they
+        // follow the theme. The versions before this were fixed HSL literals
+        // and glared in dark mode: a status colour that works on only one
+        // ground is a status colour that lies half the time.
+
+        /** The buy-box winner's row, and nothing else. */
+        wash: 'hsl(var(--wash))',
+        /** Below the ground: table headers, inset panels. */
+        sunk: 'hsl(var(--sunk))',
+        /** A rule that has to carry weight, such as a table header. */
+        'line-strong': 'hsl(var(--line-strong))',
+
+        /**
+         * The only warm colour in the system, and it never means "sale".
+         * Low stock, a price that moved, a payment not yet collected.
+         */
+        warn: {
+          DEFAULT: 'hsl(var(--warn))',
+          wash: 'hsl(var(--warn-wash))',
+        },
         success: {
-          DEFAULT: 'hsl(158 64% 52%)',
-          light: 'hsl(152 69% 94%)',
-          foreground: 'hsl(0 0% 100%)',
-        },
-        warning: {
-          DEFAULT: 'hsl(38 92% 50%)',
-          light: 'hsl(48 96% 89%)',
-          foreground: 'hsl(0 0% 100%)',
-        },
-        danger: {
-          DEFAULT: 'hsl(0 84% 60%)',
-          light: 'hsl(0 93% 94%)',
-          foreground: 'hsl(0 0% 100%)',
+          DEFAULT: 'hsl(var(--success))',
+          wash: 'hsl(var(--success-wash))',
         },
 
-        // Verified-seller badge (PRD section 9.2). Deliberately distinct from
-        // `success` so "this seller is verified" never reads as "this action
-        // succeeded".
-        verified: {
-          DEFAULT: 'hsl(168 76% 42%)',
-          foreground: 'hsl(0 0% 100%)',
-        },
+        /**
+         * Verified-seller badge (PRD section 9.2). Deliberately the same value
+         * as `primary`: on this storefront "we stand behind this" and "this is
+         * the action to take" are the same signal, and splitting them into two
+         * greens would say there is a difference the product does not have.
+         */
+        verified: 'hsl(var(--verified))',
+      },
+      fontFamily: {
+        // Set by next/font in the root layout. Naming them here means the
+        // font-sans utility and the body rule cannot drift apart.
+        sans: ['var(--font-sans)', 'var(--font-bengali)', 'system-ui', 'sans-serif'],
+        bengali: ['var(--font-bengali)', 'var(--font-sans)', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
       },
       borderRadius: {
+        // Radius by role. `tile` is for product imagery, `lg` for controls, and
+        // table rows take none - one radius on everything flattens the
+        // hierarchy it should be encoding.
+        tile: 'var(--radius-tile)',
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',

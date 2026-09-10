@@ -1,6 +1,7 @@
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type * as schema from '../schema/index.js';
 import { seedCategories } from './categories.js';
+import { seedDemoMarket, type DemoSummary } from './demo.js';
 import { seedListings } from './listings.js';
 import { seedOrganisations } from './organisations.js';
 import { seedProducts } from './products.js';
@@ -11,7 +12,7 @@ import { seedSearchIndex } from './search.js';
 
 type Db = NodePgDatabase<typeof schema>;
 
-export type SeedSummary = {
+export type SeedSummary = DemoSummary & {
   countries: number;
   currencies: number;
   organisations: number;
@@ -44,6 +45,9 @@ export async function seed(db: Db): Promise<SeedSummary> {
   const categories = await seedCategories(db);
   const { products, variants } = await seedProducts(db);
   const { warehouses, listings } = await seedListings(db);
+  // The demoable market: more sellers on one product than the acceptance
+  // fixture needs, so the storefront has a real comparison to render.
+  const demo = await seedDemoMarket(db);
   // LAST, and it must be: a search document aggregates over the listings above,
   // so an index built before them describes a catalogue nobody is selling.
   const searchDocuments = await seedSearchIndex(db);
@@ -57,6 +61,7 @@ export async function seed(db: Db): Promise<SeedSummary> {
     variants,
     warehouses,
     listings,
+    ...demo,
     searchDocuments,
   };
 }

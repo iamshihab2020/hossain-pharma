@@ -58,8 +58,12 @@ describe('seed', () => {
     const second = await seed(appDb);
     expect(second.organisations).toBe(8);
 
+    // Counted against the summary rather than a literal: the demo market adds
+    // its own sellers, and a hard-coded total turns every future fixture into a
+    // failing test about a number nobody cares about. What matters is that a
+    // second run inserted none of them twice.
     const orgs = await db.select().from(schema.organisations);
-    expect(orgs).toHaveLength(8);
+    expect(orgs).toHaveLength(second.organisations + second.demoOrganisations);
   });
 
   it('gives every seeded organisation ACTIVE status and a valid currency', async () => {

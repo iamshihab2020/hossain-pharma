@@ -2,9 +2,9 @@ import { BadRequestException } from '@nestjs/common';
 import { z } from 'zod';
 import { parseLimit } from '../../common/pagination.js';
 
-export type SortKey = 'relevance' | 'price_asc' | 'price_desc' | 'newest';
+export type SortKey = 'relevance' | 'price_asc' | 'price_desc' | 'newest' | 'sellers';
 
-const sortSchema = z.enum(['relevance', 'price_asc', 'price_desc', 'newest']);
+const sortSchema = z.enum(['relevance', 'price_asc', 'price_desc', 'newest', 'sellers']);
 
 export type SearchQuery = {
   q?: string;

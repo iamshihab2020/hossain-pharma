@@ -254,6 +254,14 @@ export class SearchService {
         return sql`d.min_price_amount DESC NULLS LAST, ${tiebreak}`;
       case 'newest':
         return tiebreak;
+      case 'sellers':
+        // "Where sellers compete" - the storefront's one home rail.
+        //
+        // Products several sellers are fighting over are the clearest statement
+        // of what this marketplace is, and the count is already materialised, so
+        // this is an ORDER BY rather than a new aggregate. NULLS LAST is not
+        // needed: seller_count is NOT NULL with a default of 0.
+        return sql`d.seller_count DESC, ${tiebreak}`;
       default:
         // Every sort ends with the product id, for the same reason the buy box
         // does: without a total order, equally-ranked rows swap between requests

@@ -1,47 +1,96 @@
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+import { getCategories, getMostCompeted } from '@/lib/api/queries';
+import { ProductCard } from '@/components/product-card';
+import { SearchField } from '@/components/search-field';
+import { Separator } from '@/components/ui/separator';
 
 /**
- * A server component, with no 'use client' directive. That is the point: the
- * archived rewrite made every page a client component and fetched nothing on
- * the server, which is the architecture this build inverts (PRD 12.1).
+ * The home page.
  *
- * The storefront arrives in Phase 2. This page exists so the build, the Tailwind
- * preset, and the salvaged primitives are all exercised by something real.
+ * No carousel, no countdown, no flash-sale rail. Those are the category
+ * default and this storefront's position is that a marketplace which visibly
+ * refuses to manufacture urgency is worth more than a countdown - see
+ * docs/DESIGN-DIRECTION.md.
+ *
+ * What replaces them: search as a typographic object, the taxonomy as a
+ * readable list rather than an icon grid, and exactly ONE rail with a reason to
+ * exist.
  */
-export default function HomePage() {
+export default async function HomePage(): Promise<ReactNode> {
+  const [categories, competed] = await Promise.all([getCategories(), getMostCompeted()]);
+
+  const topLevel = categories.filter((node) => !node.path.includes('.'));
+  const browsable = topLevel.length > 0 ? topLevel : categories;
+
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-8 p-8">
-      <div className="space-y-3">
-        <Badge variant="secondary">Phase 0 &middot; Foundation</Badge>
-        <h1 className="text-4xl font-bold tracking-tight">NexMarket</h1>
-        <p className="text-muted-foreground">
-          A universal multi-tenant marketplace. Any verified seller lists anything; buyers compare
-          competing offers on one product page and check out once across many sellers.
+    <div className="mx-auto max-w-6xl px-4">
+      <section className="py-12 sm:py-16">
+        <h1 className="max-w-[14ch] text-4xl font-bold leading-[1.05] tracking-tight sm:text-5xl">
+          Compare every seller.
+        </h1>
+        <p className="mt-4 max-w-[52ch] text-base text-muted-foreground sm:text-lg">
+          One product page, every offer on it, ranked by what you actually pay
+          once delivery is added.
         </p>
-      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>What runs today</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm text-muted-foreground">
-          <p>
-            Monorepo, Postgres with forced row-level security, a tenant-scoped transaction wrapper
-            proven under concurrent load, an idempotent seed, and this app.
-          </p>
-          <p>
-            No authentication, catalogue, cart, orders or ledger yet. Those arrive in Phases 1
-            through 4.
-          </p>
-        </CardContent>
-      </Card>
+        <div className="mt-8 max-w-xl">
+          <SearchField />
+        </div>
 
-      <div className="flex gap-3">
-        <Button>Primitives are wired</Button>
-        <Button variant="outline">Theme tokens resolve</Button>
-      </div>
-    </main>
+        <nav className="mt-6 flex flex-wrap gap-x-5 gap-y-2" aria-label="Browse categories">
+          {browsable.map((category) => (
+            <Link
+              key={category.id}
+              href={`/c/${category.slug}`}
+              className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              {category.name}
+            </Link>
+          ))}
+        </nav>
+      </section>
+
+      <Separator />
+
+      <section className="py-10">
+        <div className="flex items-baseline justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight">Where sellers compete</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Products with the most offers today.
+            </p>
+          </div>
+          <Link
+            href="/search?sort=sellers&inStock=true"
+            className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            See all
+          </Link>
+        </div>
+
+        {competed.items.length === 0 ? (
+          <p className="mt-6 text-sm text-muted-foreground">
+            Nothing is listed yet. Run <code className="font-mono">pnpm seed</code> to
+            populate the demo market.
+          </p>
+        ) : (
+          <ul className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {competed.items.map((hit) => (
+              <li key={hit.productId}>
+                <ProductCard
+                  slug={hit.slug}
+                  name={hit.name}
+                  brand={hit.brand}
+                  fromPrice={hit.price}
+                  sellerCount={hit.sellerCount}
+                  inStock={hit.inStock}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }
