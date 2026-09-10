@@ -60,6 +60,18 @@ export class OrdersService {
     return withTenant({ tenantId: null, userId, isAdmin: false }, (tx) => this.one(tx, id));
   }
 
+  /**
+   * One order, read inside a transaction the CALLER owns.
+   *
+   * `forBuyerOne` opens its own transaction, which is right for a plain read
+   * and wrong for anything that has just written: a second transaction cannot
+   * see uncommitted work, so a buyer cancelling an order would be handed back
+   * the state from before their own cancellation.
+   */
+  async oneWithin(tx: Transaction, id: string): Promise<OrderView> {
+    return this.one(tx, id);
+  }
+
   /** One seller's queue. The interceptor has already resolved the tenant. */
   async forSeller(limit: number, cursor?: string): Promise<Page<OrderView>> {
     return this.page(getRequestContext().tx, limit, cursor);

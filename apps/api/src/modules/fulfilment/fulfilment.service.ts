@@ -13,6 +13,7 @@ import {
   unitShares,
 } from '@nexmarket/shared';
 import { getRequestContext } from '../../common/request-context.js';
+import { asTenantScope } from '../../common/tenant-scope.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { ListingsService } from '../listings/listings.service.js';
 import { OrdersService, type OrderView } from '../orders/orders.service.js';
@@ -312,7 +313,88 @@ export class FulfilmentService {
     );
   }
 
+
+  /**
+   * The seller cancels units they cannot send.
+   *
+   * Line-level, so it is the one path that can leave a PARTLY shipped order:
+   * cancelling the outstanding remainder lands it on SHIPPED, because every unit
+   * that was ever going to move has moved.
+   *
+   * The transition table is not consulted for the TARGET here, deliberately -
+   * it answers "may this actor move the order to CANCELLED", and the answer
+   * after a cancellation is computed from coverage rather than chosen. What is
+   * checked instead is narrower: is this order still open enough to lose lines.
+   */
+  async cancelLinesForSeller(
+    orderId: string,
+    picks: CancelPick[] | undefined,
+    reason: string,
+  ): Promise<OrderView> {
+    const { tx, userId } = getRequestContext();
+    const order = await this.load(tx, orderId);
+    assertCancellable(order.status);
+
+    await this.cancelLines(tx, order, picks ?? outstandingOf(order), {
+      actor: 'SELLER',
+      actorUserId: userId,
+      reason,
+      eventType: 'LINES_CANCELLED',
+    });
+
+    return this.orders.forSellerOne(orderId);
+  }
+
+  /**
+   * The buyer cancels their own order, and THE FOURTH TENANT-SCOPE ESCAPE.
+   *
+   * `tenant-scope.ts` says to stop and ask before adding one, so this is the
+   * answer. A buyer cancelling writes to `orders`, `order_items`,
+   * `inventory_items` and `order_events` - all tenant-owned - and a buyer is not
+   * a tenant. The alternatives were considered and rejected in ADR 0019:
+   *
+   *   - running it as a platform admin hands a buyer's transaction every
+   *     tenant's rows to solve a narrow write problem, which ADR 0017 already
+   *     rejected once;
+   *   - a gated buyer UPDATE policy is expressible on `orders` alone and NOT on
+   *     `inventory_items`, and a buyer-writable inventory policy is not a thing
+   *     this codebase should own;
+   *   - making cancellation a request the seller actions turns a button into a
+   *     support ticket.
+   *
+   * The safety rule holds unchanged, and it is the whole reason this is allowed:
+   * the tenant is `orders.tenant_id`, READ FROM THE DATABASE inside this
+   * transaction, after `own_orders` has already proved the order is this
+   * buyer's. The buyer chose an order, never a tenant, so no caller-supplied
+   * value reaches the call.
+   *
+   * Whole-order only. A buyer wanting to drop one item of several is asking for
+   * a return, which is Phase 8.
+   */
+  async cancelForBuyer(orderId: string, reason: string | undefined): Promise<OrderView> {
+    const { tx, userId } = getRequestContext();
+    // No tenant is selected on a buyer's request, so `own_orders` is the policy
+    // that answers this - and it answers 404 for somebody else's order.
+    const order = await this.load(tx, orderId);
+    this.assertAllowed(order.status, 'CANCELLED', 'BUYER');
+
+    await asTenantScope(tx, order.tenantId, () =>
+      this.cancelLines(tx, order, outstandingOf(order), {
+        actor: 'BUYER',
+        actorUserId: userId,
+        reason,
+        eventType: 'CANCELLED',
+        finalStatus: 'CANCELLED',
+      }),
+    );
+
+    // Read INSIDE this transaction. forBuyerOne opens its own, which could not
+    // see the cancellation that has not committed yet.
+    return this.orders.oneWithin(tx, orderId);
+  }
+
   // ---------------------------------------------------------------- internals
+
 
 
 
@@ -670,6 +752,25 @@ function applyCancellations(order: LoadedOrder, picks: CancelPick[]): LoadedOrde
       cancelledQuantity: line.cancelledQuantity + (extra.get(line.id) ?? 0),
     })),
   };
+}
+
+/**
+ * Which orders can still lose lines.
+ *
+ * Not the transition table: that governs where an order MOVES, and after a
+ * line cancellation the destination is computed from coverage. This is the
+ * narrower question of whether the order is still open at all.
+ */
+function assertCancellable(status: OrderStatus): void {
+  const open: OrderStatus[] = ['PAID', 'ACCEPTED', 'PARTIALLY_SHIPPED'];
+  if (!open.includes(status)) {
+    throw new ConflictException({
+      code: 'INVALID_TRANSITION',
+      from: status,
+      to: 'CANCELLED',
+      message: `An order that is ${status} has nothing left to cancel`,
+    });
+  }
 }
 
 function applyShipments(order: LoadedOrder, picks: CancelPick[]): LoadedOrder {

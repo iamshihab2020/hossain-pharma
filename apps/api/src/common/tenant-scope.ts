@@ -2,8 +2,8 @@ import { sql } from 'drizzle-orm';
 import type { Transaction } from '@nexmarket/db';
 
 /**
- * The three places the tenant GUC is moved outside `withTenant`, and the only
- * three.
+ * The four places the tenant GUC is moved outside `withTenant`, and the only
+ * four.
  *
  * Both are transaction-local (`set_config(..., true)`), both restore in a
  * `finally`, and both wrap the smallest possible amount of work. Nothing here
@@ -18,7 +18,12 @@ import type { Transaction } from '@nexmarket/db';
  *  - reindexing a product for search, which is a CROSS-TENANT aggregate over
  *    every seller's public offers;
  *  - placing an order at checkout, where a BUYER - who is not a tenant - writes
- *    to four tenant-owned tables across several sellers in one transaction.
+ *    to four tenant-owned tables across several sellers in one transaction;
+ *  - CANCELLING an order, where the same buyer writes to four tenant-owned
+ *    tables belonging to ONE seller. Added in Phase 5 with the question this
+ *    file demands asked and answered in writing (ADR 0019): the work is
+ *    genuinely a non-tenant initiating tenant-scoped writes, not tenant-scoped
+ *    work being done from the wrong place.
  *
  * The third was added in Phase 4 after the two alternatives were rejected in
  * writing (ADR 0017): running the whole checkout as a platform admin hands a
@@ -27,7 +32,7 @@ import type { Transaction } from '@nexmarket/db';
  * to themselves against any seller - an order row is what a seller's fulfilment
  * queue reads.
  *
- * IF YOU ARE ADDING A THIRD, STOP. The question to answer first is whether the
+ * IF YOU ARE ADDING A FIFTH, STOP. The question to answer first is whether the
  * work is genuinely not tenant-scoped, or whether it is tenant-scoped work
  * being done from the wrong place. It has been the second more often than the
  * first.
@@ -56,10 +61,12 @@ export async function withoutTenantScope<T>(tx: Transaction, fn: () => Promise<T
 /**
  * Runs `fn` as `tenantId`, then restores whatever was set.
  *
- * Safe only when `tenantId` is a value THIS transaction produced. Two cases:
- * founding an organisation, and checkout - where the seller id comes from
- * `listings.tenant_id`, read from the database inside the transaction, because
- * the buyer chose a LISTING and never a tenant.
+ * Safe only when `tenantId` is a value THIS transaction produced. Three cases:
+ * founding an organisation; checkout, where the seller id comes from
+ * `listings.tenant_id`; and buyer cancellation, where it comes from
+ * `orders.tenant_id` after `own_orders` has proved the order is the caller's.
+ * In both of the latter the id is read from the database inside the
+ * transaction, because the buyer chose a LISTING or an ORDER, never a tenant.
  *
  * Never pass a caller-supplied id: that is exactly the authorisation check the
  * interceptor exists to perform, and doing it here would move it somewhere

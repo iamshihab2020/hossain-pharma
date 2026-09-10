@@ -3,7 +3,7 @@ import type { FastifyReply } from 'fastify';
 import { ApiTags } from '@nestjs/swagger';
 import { RequireCapability } from '../../common/decorators/capabilities.decorator.js';
 import type { OrderView } from '../orders/orders.service.js';
-import { parseCreateShipment, parseReject } from './dto.js';
+import { parseBuyerCancel, parseCreateShipment, parseReject, parseSellerCancel } from './dto.js';
 import { FulfilmentService, type ShipmentView } from './fulfilment.service.js';
 
 /**
@@ -66,5 +66,35 @@ export class SellerFulfilmentController {
     @Param('shipmentId') shipmentId: string,
   ): Promise<ShipmentView> {
     return this.fulfilment.markDelivered(id, shipmentId);
+  }
+
+  /** Line-level: omitting `items` cancels everything still outstanding. */
+  @Post('cancel')
+  @HttpCode(200)
+  @RequireCapability('order:write')
+  async cancel(@Param('id') id: string, @Body() body: unknown): Promise<OrderView> {
+    const input = parseSellerCancel(body);
+    return this.fulfilment.cancelLinesForSeller(id, input.items, input.reason);
+  }
+}
+
+/**
+ * The buyer's one fulfilment verb.
+ *
+ * No capability decorator: capabilities describe what a member may do inside an
+ * organisation, and a buyer is not in one. What authorises this is `own_orders`
+ * - the order is theirs or it does not exist.
+ *
+ * Whole-order only. Dropping one item of several is a return, which is Phase 8.
+ */
+@ApiTags('fulfilment')
+@Controller('me/orders/:id')
+export class BuyerFulfilmentController {
+  constructor(private readonly fulfilment: FulfilmentService) {}
+
+  @Post('cancel')
+  @HttpCode(200)
+  async cancel(@Param('id') id: string, @Body() body: unknown): Promise<OrderView> {
+    return this.fulfilment.cancelForBuyer(id, parseBuyerCancel(body).reason);
   }
 }

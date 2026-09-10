@@ -360,6 +360,23 @@ async function stockRow(listingId: string): Promise<{ onHand: number; reserved: 
   });
 }
 
+
+function asBuyer(
+  token: string,
+  method: 'GET' | 'POST',
+  url: string,
+  payload?: Record<string, unknown>,
+): Promise<LightMyRequestResponse> {
+  // NO x-tenant-id. A buyer is not a tenant, and that is what makes `own_orders`
+  // the policy that answers.
+  return app.inject({
+    method,
+    url,
+    headers: { authorization: `Bearer ${token}` },
+    ...(payload === undefined ? {} : { payload }),
+  });
+}
+
 // --------------------------------------------------------------------- tests
 
 describe('a seller accepts an order', () => {
@@ -737,5 +754,169 @@ describe('a seller marks a parcel delivered', () => {
       {},
     );
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('a buyer cancels their own order', () => {
+  it('cancels an unshipped order and returns the stock', async () => {
+    const { buyer, orders } = await paidBasket('buyer-cancel');
+    const id = orderFor(orders, alpha);
+    const availableBefore = await availableStock(alpha.listingId);
+
+    const res = await asBuyer(buyer.token, 'POST', `/me/orders/${id}/cancel`, {
+      reason: 'Changed my mind',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(json<{ status: string }>(res).status).toBe('CANCELLED');
+
+    expect(await availableStock(alpha.listingId)).toBe(availableBefore + 3);
+  });
+
+  it('owes the buyer their money back and still credits no seller', async () => {
+    const { buyer, orders } = await paidBasket('buyer-cancel-ledger');
+    const id = orderFor(orders, alpha);
+    const total = (await orderView(alpha, id)).total.amount;
+
+    const receivableBefore = await balance('BUYER_RECEIVABLE', null);
+    const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
+
+    await asBuyer(buyer.token, 'POST', `/me/orders/${id}/cancel`, {});
+
+    expect(await balance('BUYER_RECEIVABLE', null)).toBe(receivableBefore - total);
+    expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(payableBefore);
+  });
+
+  it('reads back the cancellation it just made, not the state before it', async () => {
+    // The response is read INSIDE the writing transaction. A second transaction
+    // could not see the uncommitted cancel and would answer PAID.
+    const { buyer, orders } = await paidBasket('buyer-cancel-read');
+    const id = orderFor(orders, alpha);
+
+    const res = await asBuyer(buyer.token, 'POST', `/me/orders/${id}/cancel`, {});
+    expect(json<{ status: string }>(res).status).toBe('CANCELLED');
+  });
+
+  it('refuses once a parcel has dispatched', async () => {
+    const { buyer, orders } = await paidBasket('buyer-cancel-late');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-buyer-cancel-late-1`,
+    });
+
+    const res = await asBuyer(buyer.token, 'POST', `/me/orders/${id}/cancel`, {});
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("does not let a buyer cancel somebody else's order", async () => {
+    const { orders } = await paidBasket('buyer-cancel-mine');
+    const stranger = await register(`${NS}-stranger@example.test`);
+    const id = orderFor(orders, alpha);
+
+    // 404, not 403. `own_orders` means another buyer's order does not exist.
+    const res = await asBuyer(stranger.token, 'POST', `/me/orders/${id}/cancel`, {});
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('leaves the other seller half of the basket untouched', async () => {
+    const { buyer, orders } = await paidBasket('buyer-cancel-half');
+    await asBuyer(buyer.token, 'POST', `/me/orders/${orderFor(orders, alpha)}/cancel`, {});
+
+    expect((await orderView(beta, orderFor(orders, beta))).status).toBe('PAID');
+  });
+});
+
+describe('a seller cancels outstanding lines', () => {
+  it('cancels the remainder of a partly shipped order, landing it on SHIPPED', async () => {
+    const { orders } = await paidBasket('seller-cancel-rest');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-seller-cancel-rest-1`,
+    });
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/cancel`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      reason: 'Damaged in the warehouse',
+    });
+    expect(res.statusCode).toBe(200);
+    // Everything that was ever going to move, moved.
+    expect(json<{ status: string }>(res).status).toBe('SHIPPED');
+  });
+
+  it('reverses only the cancelled units, leaving the dispatched ones paid', async () => {
+    const { orders } = await paidBasket('seller-cancel-money');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-seller-cancel-money-1`,
+    });
+    const released = json<{ released: { amount: number } }>(parcel).released.amount;
+    const total = (await orderView(alpha, id)).total.amount;
+    const receivableBefore = await balance('BUYER_RECEIVABLE', null);
+
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/cancel`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      reason: 'Out of stock',
+    });
+
+    // The reversal is the order total MINUS what already shipped - the two
+    // halves partition the order exactly, which is the whole point of
+    // allocating per unit up front.
+    expect(await balance('BUYER_RECEIVABLE', null)).toBe(receivableBefore - (total - released));
+  });
+
+  it('refuses to cancel units that already shipped', async () => {
+    const { orders } = await paidBasket('seller-cancel-shipped');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 3 }],
+      idempotencyKey: `${NS}-seller-cancel-shipped-1`,
+    });
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/cancel`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      reason: 'Too late',
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('refuses to cancel an order that is already delivered', async () => {
+    const { orders } = await paidBasket('seller-cancel-delivered');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 3 }],
+      idempotencyKey: `${NS}-seller-cancel-delivered-1`,
+    });
+    await asSeller(
+      alpha,
+      'POST',
+      `/seller/orders/${id}/shipments/${json<{ id: string }>(parcel).id}/delivered`,
+      {},
+    );
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/cancel`, {
+      reason: 'Nothing left',
+    });
+    expect(res.statusCode).toBe(409);
   });
 });
