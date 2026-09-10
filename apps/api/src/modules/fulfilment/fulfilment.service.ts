@@ -1,11 +1,12 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql, sum } from 'drizzle-orm';
 import { type Transaction, schema } from '@nexmarket/db';
 import {
   InvalidTransitionError,
   type OrderStatus,
   assertTransition,
   money,
+  releaseEntries,
   reversalEntries,
   shareFor,
   statusFromCoverage,
@@ -16,6 +17,7 @@ import { LedgerService } from '../ledger/ledger.service.js';
 import { ListingsService } from '../listings/listings.service.js';
 import { OrdersService, type OrderView } from '../orders/orders.service.js';
 import { SearchIndexService } from '../search/search-index.service.js';
+import type { CreateShipmentInput } from './dto.js';
 import { OrderEventsService, type EventActor } from './order-events.service.js';
 
 /** One order line, with everything the coverage arithmetic needs. */
@@ -41,6 +43,23 @@ type LoadedOrder = {
 };
 
 type CancelPick = { orderItemId: string; quantity: number };
+
+export type ShipmentView = {
+  id: string;
+  orderId: string;
+  shipmentNumber: string;
+  status: 'DISPATCHED' | 'DELIVERED';
+  carrierName: string | null;
+  trackingNumber: string | null;
+  released: { amount: number; currency: string };
+  commission: { amount: number; currency: string };
+  dispatchedAt: Date;
+  deliveredAt: Date | null;
+  items: { orderItemId: string; quantity: number }[];
+};
+
+/** A replayed idempotency key returns the ORIGINAL parcel, never a second one. */
+export type DispatchResult = { shipment: ShipmentView; created: boolean };
 
 /**
  * The write half of an order's life: accept, reject, dispatch, deliver, cancel.
@@ -114,7 +133,112 @@ export class FulfilmentService {
     return this.orders.forSellerOne(orderId);
   }
 
+
+  /**
+   * Dispatch: the parcel leaves, and the seller's money leaves clearing.
+   *
+   * The order of operations is the design, and each step is here for a reason:
+   *
+   *   1. idempotency FIRST, decided by a unique constraint rather than a prior
+   *      SELECT that two concurrent retries would both pass;
+   *   2. the units are claimed under a row lock, because the shipped counter
+   *      lives in another table and so cannot be a conditional UPDATE;
+   *   3. the ledger releases exactly those units' allocated share - this is
+   *      where a seller first becomes owed anything at all;
+   *   4. stock leaves the shelf AND its reservation together, so what a buyer
+   *      can buy is unchanged and no reindex is needed;
+   *   5. the status is recomputed from coverage, never set.
+   */
+  async createShipment(orderId: string, input: CreateShipmentInput): Promise<DispatchResult> {
+    const { tx, userId } = getRequestContext();
+    const order = await this.load(tx, orderId);
+
+    // ACCEPTED or PARTIALLY_SHIPPED may ship; anything else is a 409. SHIPPED
+    // is the target asked about because a parcel that completes the order lands
+    // there - which of the two it actually was is statusFromCoverage's call.
+    this.assertAllowed(order.status, 'SHIPPED', 'SELLER');
+
+    const existing = await this.shipmentByKey(tx, input.idempotencyKey);
+    if (existing !== null) return { shipment: existing, created: false };
+
+    const byId = new Map(order.lines.map((line) => [line.id, line]));
+    for (const pick of input.items) {
+      if (!byId.has(pick.orderItemId)) {
+        throw new NotFoundException(`Order item ${pick.orderItemId} is not on this order`);
+      }
+      await this.claimUnits(tx, pick);
+    }
+
+    const share = shareFor(this.sharesFor(order), consumedOf(order), input.items);
+
+    const [row] = await tx
+      .insert(schema.shipments)
+      .values({
+        tenantId: order.tenantId,
+        orderId: order.id,
+        shipmentNumber: shipmentNumber(),
+        carrierName: input.carrierName ?? null,
+        trackingNumber: input.trackingNumber ?? null,
+        releaseAmount: share.total.amount,
+        releaseCommission: share.commission.amount,
+        currency: share.total.currency,
+        idempotencyKey: input.idempotencyKey,
+      })
+      .returning();
+    if (row === undefined) throw new ConflictException('Shipment could not be created');
+
+    await tx.insert(schema.shipmentItems).values(
+      input.items.map((pick) => ({
+        tenantId: order.tenantId,
+        shipmentId: row.id,
+        orderItemId: pick.orderItemId,
+        quantity: pick.quantity,
+      })),
+    );
+
+    await this.ledger.post(tx, {
+      paymentIntentId: order.paymentIntentId,
+      kind: 'FULFILMENT',
+      entries: releaseEntries(order.tenantId, share),
+    });
+
+    for (const pick of input.items) {
+      const line = byId.get(pick.orderItemId);
+      if (line === undefined) continue;
+      await this.dispatchStock(tx, line.listingId, pick.quantity);
+      // NO reindex here, and that is not an oversight. on_hand and reserved
+      // fall TOGETHER, so `available = on_hand - reserved` is unchanged: the
+      // goods left the shelf and left their reservation at the same moment, and
+      // what a buyer can buy did not move. The recompute still runs, because
+      // available_stock caches that difference and one writer owns it.
+      await this.listings.recomputeAvailableStock(tx, line.listingId);
+    }
+
+    const shipped = applyShipments(order, input.items);
+    await tx
+      .update(schema.orders)
+      .set({ status: statusFromCoverage(coverageOf(shipped), order.status), updatedAt: new Date() })
+      .where(eq(schema.orders.id, order.id));
+
+    await this.events.record(tx, order, {
+      type: 'SHIPMENT_DISPATCHED',
+      actor: 'SELLER',
+      actorUserId: userId,
+      payload: {
+        shipmentId: row.id,
+        shipmentNumber: row.shipmentNumber,
+        ...(input.carrierName === undefined ? {} : { carrierName: input.carrierName }),
+        ...(input.trackingNumber === undefined ? {} : { trackingNumber: input.trackingNumber }),
+        items: input.items,
+        released: { amount: share.total.amount, currency: share.total.currency },
+      },
+    });
+
+    return { shipment: toShipmentView(row, input.items), created: true };
+  }
+
   // ---------------------------------------------------------------- internals
+
 
   /**
    * Cancels units, and is the ONE place that does.
@@ -243,6 +367,89 @@ export class FulfilmentService {
     }
   }
 
+
+  /**
+   * Takes `pick.quantity` units of a line, or refuses.
+   *
+   * A row lock rather than the conditional UPDATE the reservation uses, and the
+   * difference is forced: the shipped counter is SUM(shipment_items.quantity)
+   * in ANOTHER table, so there is no single row whose predicate could be
+   * re-checked after the lock. Locking the parent line serialises every
+   * dispatch of it instead, and the count that follows is a separate statement,
+   * so under READ COMMITTED it sees whatever the transaction ahead of it
+   * committed rather than a pre-lock snapshot.
+   *
+   * The deferred trigger from migration 0014 is the backstop underneath, and it
+   * is what makes this safe rather than merely careful.
+   */
+  private async claimUnits(tx: Transaction, pick: CancelPick): Promise<void> {
+    await tx.execute(sql`SELECT id FROM order_items WHERE id = ${pick.orderItemId} FOR UPDATE`);
+
+    const remaining = await tx.execute<{ remaining: number }>(sql`
+      SELECT oi.quantity - oi.cancelled_quantity - COALESCE((
+               SELECT SUM(si.quantity)::int FROM shipment_items si
+                WHERE si.order_item_id = oi.id
+             ), 0) AS remaining
+        FROM order_items oi
+       WHERE oi.id = ${pick.orderItemId}
+    `);
+
+    const left = remaining.rows[0]?.remaining ?? 0;
+    if (left < pick.quantity) {
+      throw new ConflictException(
+        `Only ${left} unit(s) of that line are left to ship, and ${pick.quantity} were picked`,
+      );
+    }
+  }
+
+  /**
+   * Goods leave the building: on_hand AND reserved both fall.
+   *
+   * Both, or `available` moves and the buy box starts advertising stock that has
+   * already been posted. Same both-halves guard as every other inventory write.
+   */
+  private async dispatchStock(tx: Transaction, listingId: string, quantity: number): Promise<void> {
+    const updated = await tx.execute(sql`
+      UPDATE inventory_items
+         SET on_hand = on_hand - ${quantity},
+             reserved = reserved - ${quantity},
+             updated_at = now()
+       WHERE id = (
+         SELECT id FROM inventory_items
+          WHERE listing_id = ${listingId} AND reserved >= ${quantity} AND on_hand >= ${quantity}
+          ORDER BY reserved DESC
+          LIMIT 1
+          FOR UPDATE
+       )
+         AND reserved >= ${quantity} AND on_hand >= ${quantity}
+      RETURNING id
+    `);
+    if ((updated.rowCount ?? 0) === 0) {
+      throw new ConflictException('No reserved stock to dispatch for that listing');
+    }
+  }
+
+  /** The parcel this key already made, if it made one. */
+  private async shipmentByKey(tx: Transaction, key: string): Promise<ShipmentView | null> {
+    const rows = await tx
+      .select()
+      .from(schema.shipments)
+      .where(eq(schema.shipments.idempotencyKey, key))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+
+    const items = await tx
+      .select({
+        orderItemId: schema.shipmentItems.orderItemId,
+        quantity: schema.shipmentItems.quantity,
+      })
+      .from(schema.shipmentItems)
+      .where(eq(schema.shipmentItems.shipmentId, row.id));
+
+    return toShipmentView(row, items);
+  }
+
   /** The order total and commission, split across the order's individual units. */
   private sharesFor(order: LoadedOrder) {
     return unitShares(
@@ -309,13 +516,38 @@ export class FulfilmentService {
         quantity: schema.orderItems.quantity,
         cancelledQuantity: schema.orderItems.cancelledQuantity,
         unitPriceAmount: schema.orderItems.unitPriceAmount,
-        shipped: sql<number>`COALESCE((
-          SELECT SUM(si.quantity)::int FROM shipment_items si
-           WHERE si.order_item_id = ${schema.orderItems.id}
-        ), 0)`,
       })
       .from(schema.orderItems)
       .where(eq(schema.orderItems.orderId, orderId));
+
+    /**
+     * Shipped quantity as its OWN grouped query, never a correlated subquery in
+     * the select list above.
+     *
+     * ADR 0010, and this cost an afternoon a second time before the note was
+     * believed: Drizzle renders column references inside a `sql` template in the
+     * SELECT list WITHOUT table qualification, so
+     * `WHERE si.order_item_id = ${schema.orderItems.id}` becomes
+     * `WHERE si.order_item_id = "id"` - which resolves to shipment_items' OWN
+     * id, compares the table to itself, is always false, and raises nothing.
+     * Every line reported zero shipped units, so a completed order stayed
+     * PARTIALLY_SHIPPED and every parcel re-allocated the same unit shares.
+     */
+    const ids = lines.map((line) => line.id);
+    const shippedByLine = new Map<string, number>();
+    if (ids.length > 0) {
+      const sums = await tx
+        .select({
+          orderItemId: schema.shipmentItems.orderItemId,
+          shipped: sum(schema.shipmentItems.quantity),
+        })
+        .from(schema.shipmentItems)
+        .where(inArray(schema.shipmentItems.orderItemId, ids))
+        .groupBy(schema.shipmentItems.orderItemId);
+      for (const row of sums) {
+        shippedByLine.set(row.orderItemId, Number(row.shipped ?? 0));
+      }
+    }
 
     return {
       ...order,
@@ -324,7 +556,7 @@ export class FulfilmentService {
         listingId: line.listingId,
         quantity: line.quantity,
         cancelledQuantity: line.cancelledQuantity,
-        shippedQuantity: Number(line.shipped),
+        shippedQuantity: shippedByLine.get(line.id) ?? 0,
         unitPriceAmount: line.unitPriceAmount,
       })),
     };
@@ -362,6 +594,46 @@ function applyCancellations(order: LoadedOrder, picks: CancelPick[]): LoadedOrde
       cancelledQuantity: line.cancelledQuantity + (extra.get(line.id) ?? 0),
     })),
   };
+}
+
+function applyShipments(order: LoadedOrder, picks: CancelPick[]): LoadedOrder {
+  const extra = new Map(picks.map((pick) => [pick.orderItemId, pick.quantity]));
+  return {
+    ...order,
+    lines: order.lines.map((line) => ({
+      ...line,
+      shippedQuantity: line.shippedQuantity + (extra.get(line.id) ?? 0),
+    })),
+  };
+}
+
+function toShipmentView(
+  row: typeof schema.shipments.$inferSelect,
+  items: { orderItemId: string; quantity: number }[],
+): ShipmentView {
+  return {
+    id: row.id,
+    orderId: row.orderId,
+    shipmentNumber: row.shipmentNumber,
+    status: row.status,
+    carrierName: row.carrierName,
+    trackingNumber: row.trackingNumber,
+    released: { amount: row.releaseAmount, currency: row.currency },
+    commission: { amount: row.releaseCommission, currency: row.currency },
+    dispatchedAt: row.dispatchedAt,
+    deliveredAt: row.deliveredAt,
+    items,
+  };
+}
+
+/** Same shape as `orderNumber` in checkout: human-facing, per seller, unique. */
+function shipmentNumber(): string {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const noise = Math.floor(Math.random() * 46_656)
+    .toString(36)
+    .toUpperCase()
+    .padStart(3, '0');
+  return `SHP-${stamp}-${noise}`;
 }
 
 function coverageOf(order: LoadedOrder) {

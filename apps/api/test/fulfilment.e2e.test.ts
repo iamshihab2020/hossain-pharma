@@ -331,6 +331,35 @@ async function balance(kind: string, ownerOrgId: string | null): Promise<number>
   });
 }
 
+
+type OrderItemRow = { id: string; quantity: number };
+
+async function linesOf(seller: Seller, orderId: string): Promise<OrderItemRow[]> {
+  const res = await asSeller(seller, 'GET', `/seller/orders/${orderId}`);
+  expect(res.statusCode).toBe(200);
+  return json<{ items: OrderItemRow[] }>(res).items;
+}
+
+/** The order as its seller sees it. */
+async function orderView(
+  seller: Seller,
+  orderId: string,
+): Promise<{ status: string; total: { amount: number } }> {
+  const res = await asSeller(seller, 'GET', `/seller/orders/${orderId}`);
+  expect(res.statusCode).toBe(200);
+  return json(res);
+}
+
+async function stockRow(listingId: string): Promise<{ onHand: number; reserved: number }> {
+  return withTenant({ tenantId: null, userId: null, isAdmin: true }, async (tx) => {
+    const rows = await tx.execute<{ on_hand: number; reserved: number }>(
+      sql`SELECT on_hand, reserved FROM inventory_items WHERE listing_id = ${listingId}`,
+    );
+    const row = rows.rows[0];
+    return { onHand: row?.on_hand ?? -1, reserved: row?.reserved ?? -1 };
+  });
+}
+
 // --------------------------------------------------------------------- tests
 
 describe('a seller accepts an order', () => {
@@ -434,5 +463,177 @@ describe('a seller rejects an order', () => {
     await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
     const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/reject`, { reason: 'Too late' });
     expect(res.statusCode).toBe(409);
+  });
+});
+
+describe('a seller dispatches part of an order', () => {
+  it('ships one unit of three and leaves the order PARTIALLY_SHIPPED', async () => {
+    const { orders } = await paidBasket('ship-part');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      carrierName: 'Pathao',
+      trackingNumber: 'PT-1',
+      idempotencyKey: `${NS}-ship-part-1`,
+    });
+    expect(res.statusCode).toBe(201);
+    expect(json<{ carrierName: string }>(res).carrierName).toBe('Pathao');
+
+    expect((await orderView(alpha, id)).status).toBe('PARTIALLY_SHIPPED');
+  });
+
+  it('does not change what a buyer can buy', async () => {
+    const { orders } = await paidBasket('ship-stock');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const before = await stockRow(alpha.listingId);
+    const availableBefore = await availableStock(alpha.listingId);
+
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      idempotencyKey: `${NS}-ship-stock-1`,
+    });
+
+    // on_hand and reserved BOTH fall, so available is untouched. That is why
+    // dispatch needs no reindex, and this test is what keeps the claim honest.
+    const after = await stockRow(alpha.listingId);
+    expect(after.onHand).toBe(before.onHand - 2);
+    expect(after.reserved).toBe(before.reserved - 2);
+    expect(await availableStock(alpha.listingId)).toBe(availableBefore);
+  });
+
+  it('pays the seller for the units that went, and no more', async () => {
+    const { orders } = await paidBasket('ship-money');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
+    const commissionBefore = await balance('PLATFORM_REVENUE_COMMISSION', null);
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-ship-money-1`,
+    });
+    const parcel = json<{
+      released: { amount: number };
+      commission: { amount: number };
+    }>(res);
+
+    // A payable is a CREDIT, so it is negative in a signed ledger.
+    const payable = parcel.released.amount - parcel.commission.amount;
+    expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(payableBefore - payable);
+    expect(await balance('PLATFORM_REVENUE_COMMISSION', null)).toBe(
+      commissionBefore - parcel.commission.amount,
+    );
+  });
+
+  it('closes the order to exactly zero outstanding on the last parcel', async () => {
+    const { orders } = await paidBasket('ship-all');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const total = (await orderView(alpha, id)).total.amount;
+    const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
+    const commissionBefore = await balance('PLATFORM_REVENUE_COMMISSION', null);
+
+    // Two parcels, 1 then 2, so the split crosses the allocation boundary.
+    const first = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-ship-all-1`,
+    });
+    expect(first.statusCode).toBe(201);
+    const second = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      idempotencyKey: `${NS}-ship-all-2`,
+    });
+    expect(second.statusCode).toBe(201);
+
+    expect((await orderView(alpha, id)).status).toBe('SHIPPED');
+
+    // THE ACCEPTANCE ARITHMETIC. Two parcels' releases must sum EXACTLY to what
+    // one full capture would have paid - no minor unit invented, none lost.
+    const payableAfter = await balance('SELLER_PAYABLE', alpha.orgId);
+    const commissionAfter = await balance('PLATFORM_REVENUE_COMMISSION', null);
+    const paid = payableBefore - payableAfter;
+    const commission = commissionBefore - commissionAfter;
+    expect(paid + commission).toBe(total);
+  });
+
+  it('returns the original parcel when the idempotency key is replayed', async () => {
+    const { orders } = await paidBasket('ship-idem');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const body = {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-ship-idem-1`,
+    };
+    const first = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, body);
+    const again = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, body);
+
+    expect(first.statusCode).toBe(201);
+    // 200, not 201: the parcel already existed. A retried dispatch that shipped
+    // twice would release the seller's money twice.
+    expect(again.statusCode).toBe(200);
+    expect(json<{ id: string }>(again).id).toBe(json<{ id: string }>(first).id);
+  });
+
+  it('refuses to ship more units than remain', async () => {
+    const { orders } = await paidBasket('ship-too-many');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 99 }],
+      idempotencyKey: `${NS}-ship-too-many-1`,
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('refuses to ship an order that has not been accepted', async () => {
+    const { orders } = await paidBasket('ship-unaccepted');
+    const id = orderFor(orders, alpha);
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-ship-unaccepted-1`,
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('lets exactly one of two concurrent dispatches of the last unit win', async () => {
+    const { orders } = await paidBasket('ship-race', { alpha: 1, beta: 1 });
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const attempt = (n: number) =>
+      asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+        items: [{ orderItemId: line.id, quantity: 1 }],
+        idempotencyKey: `${NS}-ship-race-${n}`,
+      });
+
+    // Different keys, so idempotency cannot be what saves this - the row lock
+    // in claimUnits has to.
+    const [a, b] = await Promise.all([attempt(1), attempt(2)]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([201, 409]);
   });
 });

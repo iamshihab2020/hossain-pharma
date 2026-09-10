@@ -1,9 +1,10 @@
-import { Body, Controller, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Param, Post, Res } from '@nestjs/common';
+import type { FastifyReply } from 'fastify';
 import { ApiTags } from '@nestjs/swagger';
 import { RequireCapability } from '../../common/decorators/capabilities.decorator.js';
 import type { OrderView } from '../orders/orders.service.js';
-import { parseReject } from './dto.js';
-import { FulfilmentService } from './fulfilment.service.js';
+import { parseCreateShipment, parseReject } from './dto.js';
+import { FulfilmentService, type ShipmentView } from './fulfilment.service.js';
 
 /**
  * The seller's fulfilment verbs.
@@ -36,5 +37,24 @@ export class SellerFulfilmentController {
   @RequireCapability('order:write')
   async reject(@Param('id') id: string, @Body() body: unknown): Promise<OrderView> {
     return this.fulfilment.reject(id, parseReject(body).reason);
+  }
+
+  /**
+   * 201 for a parcel that was created, 200 for a replayed idempotency key.
+   *
+   * The distinction is the point: a client that retries a dispatch it is not
+   * sure landed must be able to tell "I made this" from "this already existed",
+   * and both are successes.
+   */
+  @Post('shipments')
+  @RequireCapability('order:write')
+  async ship(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<ShipmentView> {
+    const result = await this.fulfilment.createShipment(id, parseCreateShipment(body));
+    reply.status(result.created ? 201 : 200);
+    return result.shipment;
   }
 }
