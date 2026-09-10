@@ -637,3 +637,105 @@ describe('a seller dispatches part of an order', () => {
     expect([a.statusCode, b.statusCode].sort()).toEqual([201, 409]);
   });
 });
+
+describe('a seller marks a parcel delivered', () => {
+  it('marks the parcel delivered without moving any money', async () => {
+    const { orders } = await paidBasket('deliver');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 3 }],
+      idempotencyKey: `${NS}-deliver-1`,
+    });
+    const shipmentId = json<{ id: string }>(parcel).id;
+    const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
+
+    const res = await asSeller(
+      alpha,
+      'POST',
+      `/seller/orders/${id}/shipments/${shipmentId}/delivered`,
+      {},
+    );
+    expect(res.statusCode).toBe(200);
+    expect(json<{ status: string }>(res).status).toBe('DELIVERED');
+
+    // The money moved at dispatch. Delivery is a fact about a box.
+    expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(payableBefore);
+  });
+
+  it('leaves the order SHIPPED while another parcel is still in transit', async () => {
+    const { orders } = await paidBasket('deliver-partial');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const first = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-deliver-partial-1`,
+    });
+    const second = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      idempotencyKey: `${NS}-deliver-partial-2`,
+    });
+    expect((await orderView(alpha, id)).status).toBe('SHIPPED');
+
+    await asSeller(
+      alpha,
+      'POST',
+      `/seller/orders/${id}/shipments/${json<{ id: string }>(first).id}/delivered`,
+      {},
+    );
+    // One box home, one still out. The order has not been delivered.
+    expect((await orderView(alpha, id)).status).toBe('SHIPPED');
+
+    await asSeller(
+      alpha,
+      'POST',
+      `/seller/orders/${id}/shipments/${json<{ id: string }>(second).id}/delivered`,
+      {},
+    );
+    expect((await orderView(alpha, id)).status).toBe('DELIVERED');
+  });
+
+  it('refuses to deliver the same parcel twice', async () => {
+    const { orders } = await paidBasket('deliver-twice');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 3 }],
+      idempotencyKey: `${NS}-deliver-twice-1`,
+    });
+    const url = `/seller/orders/${id}/shipments/${json<{ id: string }>(parcel).id}/delivered`;
+
+    expect((await asSeller(alpha, 'POST', url, {})).statusCode).toBe(200);
+    expect((await asSeller(alpha, 'POST', url, {})).statusCode).toBe(409);
+  });
+
+  it('does not let another seller deliver the parcel', async () => {
+    const { orders } = await paidBasket('deliver-intruder');
+    const id = orderFor(orders, alpha);
+    await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
+    const [line] = await linesOf(alpha, id);
+    if (!line) throw new Error('no line');
+
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-deliver-intruder-1`,
+    });
+
+    const res = await asSeller(
+      beta,
+      'POST',
+      `/seller/orders/${id}/shipments/${json<{ id: string }>(parcel).id}/delivered`,
+      {},
+    );
+    expect(res.statusCode).toBe(404);
+  });
+});

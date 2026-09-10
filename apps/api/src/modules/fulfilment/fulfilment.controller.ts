@@ -57,4 +57,14 @@ export class SellerFulfilmentController {
     reply.status(result.created ? 201 : 200);
     return result.shipment;
   }
+
+  @Post('shipments/:shipmentId/delivered')
+  @HttpCode(200)
+  @RequireCapability('order:write')
+  async deliver(
+    @Param('id') id: string,
+    @Param('shipmentId') shipmentId: string,
+  ): Promise<ShipmentView> {
+    return this.fulfilment.markDelivered(id, shipmentId);
+  }
 }

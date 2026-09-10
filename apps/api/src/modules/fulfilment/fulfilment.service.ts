@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { eq, inArray, sql, sum } from 'drizzle-orm';
+import { and, eq, inArray, sql, sum } from 'drizzle-orm';
 import { type Transaction, schema } from '@nexmarket/db';
 import {
   InvalidTransitionError,
@@ -237,7 +237,83 @@ export class FulfilmentService {
     return { shipment: toShipmentView(row, input.items), created: true };
   }
 
+
+  /**
+   * The parcel arrived.
+   *
+   * NO LEDGER POSTING, and this is the obvious place to come looking for one.
+   * The money moved at DISPATCH - see `releaseEntries` - so delivery changes
+   * nothing about who is owed what. When Phase 6 replaces this button with
+   * carrier tracking events, the trigger changes and this stays empty.
+   *
+   * The ORDER becomes DELIVERED only when no parcel is still in transit and no
+   * unit is still outstanding: a seller who has shipped half and delivered that
+   * half has not delivered the order.
+   */
+  async markDelivered(orderId: string, shipmentId: string): Promise<ShipmentView> {
+    const { tx, userId } = getRequestContext();
+    const order = await this.load(tx, orderId);
+
+    const rows = await tx
+      .select()
+      .from(schema.shipments)
+      .where(and(eq(schema.shipments.id, shipmentId), eq(schema.shipments.orderId, orderId)))
+      .limit(1);
+    const parcel = rows[0];
+    // A 404, not a 403: under RLS a parcel that is not yours does not exist.
+    if (parcel === undefined) throw new NotFoundException('No such shipment');
+    if (parcel.status === 'DELIVERED') {
+      throw new ConflictException({
+        code: 'INVALID_TRANSITION',
+        from: 'DELIVERED',
+        to: 'DELIVERED',
+        message: 'That parcel is already marked delivered',
+      });
+    }
+
+    const delivered = new Date();
+    await tx
+      .update(schema.shipments)
+      .set({ status: 'DELIVERED', deliveredAt: delivered, updatedAt: delivered })
+      .where(eq(schema.shipments.id, shipmentId));
+
+    const inTransit = await tx
+      .select({ id: schema.shipments.id })
+      .from(schema.shipments)
+      .where(and(eq(schema.shipments.orderId, orderId), eq(schema.shipments.status, 'DISPATCHED')));
+
+    const outstanding = outstandingOf(order).length;
+    if (inTransit.length === 0 && outstanding === 0) {
+      this.assertAllowed(order.status, 'DELIVERED', 'SELLER');
+      await tx
+        .update(schema.orders)
+        .set({ status: 'DELIVERED', updatedAt: delivered })
+        .where(eq(schema.orders.id, orderId));
+    }
+
+    await this.events.record(tx, order, {
+      type: 'SHIPMENT_DELIVERED',
+      actor: 'SELLER',
+      actorUserId: userId,
+      payload: { shipmentId, shipmentNumber: parcel.shipmentNumber },
+    });
+
+    const items = await tx
+      .select({
+        orderItemId: schema.shipmentItems.orderItemId,
+        quantity: schema.shipmentItems.quantity,
+      })
+      .from(schema.shipmentItems)
+      .where(eq(schema.shipmentItems.shipmentId, shipmentId));
+
+    return toShipmentView(
+      { ...parcel, status: 'DELIVERED', deliveredAt: delivered },
+      items,
+    );
+  }
+
   // ---------------------------------------------------------------- internals
+
 
 
   /**
