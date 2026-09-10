@@ -400,8 +400,21 @@ describe('suspension reaches the index', () => {
    * Nothing about `POST /admin/orgs/:id/suspend` looks like it touches search.
    */
   it('withdraws a suspended sellers offers from search, and restores them on reinstatement', async () => {
+    /**
+     * Selected by slug, never as items[0].
+     *
+     * "Himsagar" is a real mango variety and the demo market seeds one too, so
+     * this query legitimately returns more than one product. Worse, ranking
+     * MOVES as the test runs: once suspension strips the fixture's price and
+     * seller count, it stops sorting first, and items[0] silently becomes
+     * somebody else's product that was never suspended. The assertion then
+     * reads a healthy row and reports the reindex as broken.
+     */
+    const mine = (res: LightMyRequestResponse) =>
+      res.json<SearchBody>().items.find((i) => i.slug === 'search-himsagar-mango');
+
     const before = await search('q=Himsagar');
-    expect(before.json<SearchBody>().items[0]?.price).not.toBeNull();
+    expect(mine(before)?.price).not.toBeNull();
 
     const suspend = await app.inject({
       method: 'POST',
@@ -414,7 +427,8 @@ describe('suspension reaches the index', () => {
     const during = await search('q=Himsagar');
     // Still findable - the catalogue entry is real - but with no price and no
     // sellers, because nobody is offering it.
-    expect(during.json<SearchBody>().items[0]?.price).toBeNull();
+    expect(mine(during)?.price).toBeNull();
+    expect(mine(during)?.sellerCount).toBe(0);
 
     const reinstate = await app.inject({
       method: 'POST',
@@ -424,7 +438,7 @@ describe('suspension reaches the index', () => {
     expect(reinstate.statusCode).toBe(201);
 
     const after = await search('q=Himsagar');
-    expect(after.json<SearchBody>().items[0]?.price).not.toBeNull();
+    expect(mine(after)?.price).not.toBeNull();
   });
 });
 
