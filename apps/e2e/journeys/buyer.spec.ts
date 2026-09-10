@@ -39,7 +39,7 @@ test('a basket spanning three sellers becomes three orders', async ({ page }) =>
 
   // Rows carry radio semantics: selecting one is what the Add button acts on.
   const offers = page.getByRole('radio');
-  await expect(await offers.count()).toBeGreaterThanOrEqual(3);
+  expect(await offers.count()).toBeGreaterThanOrEqual(3);
 
   // --- three different sellers into one cart -------------------------------
   for (let index = 0; index < 3; index += 1) {
