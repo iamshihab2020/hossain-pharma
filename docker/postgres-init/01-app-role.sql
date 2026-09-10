@@ -10,7 +10,11 @@
 
 CREATE ROLE nexmarket_app WITH LOGIN PASSWORD 'nexmarket_dev_password' NOBYPASSRLS;
 
-GRANT CONNECT ON DATABASE nexmarket TO nexmarket_app;
+-- :"DBNAME" is a psql built-in holding the database this script is running
+-- against, so this file works for any POSTGRES_DB. It used to name `nexmarket`
+-- literally, which meant the e2e stack's `nexmarket_e2e` failed the grant and
+-- the container exited during init - a hard failure, but an obscure one.
+GRANT CONNECT ON DATABASE :"DBNAME" TO nexmarket_app;
 GRANT USAGE ON SCHEMA public TO nexmarket_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nexmarket_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexmarket_app;

@@ -42,6 +42,42 @@ services:
       timeout: 5s
       retries: 10
 
+  # THE TEST STACK. Behind a profile, so `docker compose up -d` for development
+  # starts nothing extra. The e2e suite DROPS ITS SCHEMA on every run, which is
+  # a thing you want nowhere near the database you were mid-way through
+  # debugging - hence a separate pair rather than a separate schema.
+  postgres-e2e:
+    profiles: ['e2e']
+    image: postgres:16-alpine
+    container_name: nexmarket-postgres-e2e
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nexmarket_e2e
+    ports:
+      - '5434:5432'
+    # NO named volume, deliberately: this database is disposable, and a volume
+    # would carry yesterday's rows into today's run.
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d nexmarket_e2e']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-e2e:
+    profiles: ['e2e']
+    image: redis:7-alpine
+    container_name: nexmarket-redis-e2e
+    ports:
+      - '6381:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   nexmarket-pgdata:
   nexmarket-redisdata:
