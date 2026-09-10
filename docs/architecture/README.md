@@ -26,6 +26,8 @@ invariants in one place — see [`../SYSTEM-DESIGN.md`](../SYSTEM-DESIGN.md).
 | [0016](./0016-the-ledger-and-its-constraint-trigger.md) | **The ledger: signed entries, a deferred trigger, and why it is platform-owned** | 4 |
 | [0017](./0017-orders-and-the-buyer-policy.md) | Orders: the buyer policy, the third tenant-scope escape, and price tampering | 4 |
 | [0018](./0018-payment-port-and-webhook-idempotency.md) | The payment port, cash on delivery, and why Stripe is not here yet | 4 |
+| [0019](./0019-buyer-cancellation-and-the-fourth-escape.md) | Buyer cancellation, and the fourth tenant-scope escape | 5 |
+| [0020](./0020-dispatch-release-and-per-unit-allocation.md) | **Dispatch releases the payable, and the allocation that makes it exact** | 5 |
 
 **Read 0003 first.** It covers the three separate ways tenant isolation can be
 reduced to decoration, each of which fails silently, and where each is checked.

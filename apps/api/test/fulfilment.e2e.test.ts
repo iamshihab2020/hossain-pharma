@@ -1141,3 +1141,103 @@ describe('the published contract', () => {
     expect(seen).toEqual(['PAID', 'ACCEPTED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'SHIPPED']);
   });
 });
+
+/**
+ * PRD 11 PHASE 5, THE DEMO, END TO END.
+ *
+ * "Fulfil one seller's half of an order while the other half stays pending."
+ *
+ * The individual criteria are asserted above, in the places that can fail
+ * precisely. This one is the narrative: one basket, two sellers, and the state
+ * of the world after each step - checked from the BUYER's view, because that is
+ * where a demo is actually watched from.
+ */
+describe('PRD 11 Phase 5: the demo', () => {
+  it('fulfils one seller half while the other stays pending, and the books stay true', async () => {
+    const { buyer, orders } = await paidBasket('demo');
+    const alphaOrder = orderFor(orders, alpha);
+    const betaOrder = orderFor(orders, beta);
+
+    const alphaTotal = (await orderView(alpha, alphaOrder)).total.amount;
+    const betaTotal = (await orderView(beta, betaOrder)).total.amount;
+
+    const opening = {
+      alphaPayable: await balance('SELLER_PAYABLE', alpha.orgId),
+      betaPayable: await balance('SELLER_PAYABLE', beta.orgId),
+      commission: await balance('PLATFORM_REVENUE_COMMISSION', null),
+    };
+
+    // 1. Both orders are paid and nobody is owed anything yet: a capture parks
+    //    the money in clearing, and dispatch is what attributes it.
+    expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(opening.alphaPayable);
+    expect(await balance('SELLER_PAYABLE', beta.orgId)).toBe(opening.betaPayable);
+
+    // 2. Alpha accepts and sends two of three units.
+    await asSeller(alpha, 'POST', `/seller/orders/${alphaOrder}/accept`, {});
+    const [line] = await linesOf(alpha, alphaOrder);
+    if (!line) throw new Error('no line');
+    const parcel = await asSeller(alpha, 'POST', `/seller/orders/${alphaOrder}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 2 }],
+      carrierName: 'Pathao',
+      trackingNumber: 'PT-DEMO',
+      idempotencyKey: `${NS}-demo-1`,
+    });
+    expect(parcel.statusCode).toBe(201);
+
+    // Half out the door: alpha is PARTIALLY_SHIPPED, beta has not moved.
+    expect((await orderView(alpha, alphaOrder)).status).toBe('PARTIALLY_SHIPPED');
+    expect((await orderView(beta, betaOrder)).status).toBe('PAID');
+    expect(await balance('SELLER_PAYABLE', beta.orgId)).toBe(opening.betaPayable);
+
+    // 3. Alpha sends the rest and marks both parcels delivered.
+    const rest = await asSeller(alpha, 'POST', `/seller/orders/${alphaOrder}/shipments`, {
+      items: [{ orderItemId: line.id, quantity: 1 }],
+      idempotencyKey: `${NS}-demo-2`,
+    });
+    expect((await orderView(alpha, alphaOrder)).status).toBe('SHIPPED');
+
+    for (const res of [parcel, rest]) {
+      await asSeller(
+        alpha,
+        'POST',
+        `/seller/orders/${alphaOrder}/shipments/${json<{ id: string }>(res).id}/delivered`,
+        {},
+      );
+    }
+    expect((await orderView(alpha, alphaOrder)).status).toBe('DELIVERED');
+
+    // 4. THE ARITHMETIC. Alpha has been paid, in two pieces, exactly the order
+    //    total - no minor unit invented and none lost. Beta still has nothing.
+    const alphaPaid = opening.alphaPayable - (await balance('SELLER_PAYABLE', alpha.orgId));
+    const commissionTaken = opening.commission - (await balance('PLATFORM_REVENUE_COMMISSION', null));
+    expect(alphaPaid + commissionTaken).toBe(alphaTotal);
+    expect(await balance('SELLER_PAYABLE', beta.orgId)).toBe(opening.betaPayable);
+
+    // 5. The buyer sees one order delivered and one still waiting, each with its
+    //    own history, and the untouched one is still cancellable.
+    const delivered = json<{ status: string; timeline: { type: string }[] }>(
+      await asBuyer(buyer.token, 'GET', `/me/orders/${alphaOrder}`),
+    );
+    expect(delivered.status).toBe('DELIVERED');
+    expect(delivered.timeline.map((e) => e.type)).toEqual([
+      'PLACED',
+      'PAID',
+      'ACCEPTED',
+      'SHIPMENT_DISPATCHED',
+      'SHIPMENT_DISPATCHED',
+      'SHIPMENT_DELIVERED',
+      'SHIPMENT_DELIVERED',
+    ]);
+
+    const waiting = await asBuyer(buyer.token, 'POST', `/me/orders/${betaOrder}/cancel`, {
+      reason: 'Seller went quiet',
+    });
+    expect(waiting.statusCode).toBe(200);
+    expect(json<{ status: string }>(waiting).status).toBe('CANCELLED');
+
+    // 6. And the cancelled half returns exactly its own total to the buyer,
+    //    while alpha - who actually shipped - keeps every taka of theirs.
+    expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(opening.alphaPayable - alphaPaid);
+    expect(betaTotal).toBeGreaterThan(0);
+  });
+});

@@ -260,15 +260,16 @@ request in the system**, not only search.
 
 ### 3.5 The two sanctioned escapes
 
-Exactly two operations move `app.tenant_id` outside `withTenant`. Both live in
-`common/tenant-scope.ts`, both are transaction-local, both restore in a
-`finally`.
+Two HELPERS move `app.tenant_id` outside `withTenant`, across four call sites.
+Both live in `common/tenant-scope.ts`, both are transaction-local, both restore
+in a `finally`.
 
 ```mermaid
 flowchart LR
     A["withoutTenantScope"] --> A1["Reindexing a product for search.<br/>A cross-tenant aggregate: evaluated with one<br/>tenant selected it computes 'the cheapest offer'<br/>from that seller alone and writes a<br/>confidently wrong number."]
     B["asTenantScope"] --> B1["Founding an organisation.<br/>Must write the first membership row for a<br/>tenant that did not exist when the request began."]
     B --> B2["Placing an order — added in Phase 4.<br/>A buyer is not a tenant, yet checkout writes to<br/>orders, order_items, inventory_items and listings<br/>across several sellers in one transaction."]
+    B --> B3["Cancelling an order — added in Phase 5.<br/>The same buyer, writing to four tenant-owned tables<br/>belonging to ONE seller. The tenant comes from<br/>orders.tenant_id, after own_orders proved it is theirs."]
 ```
 
 **Phase 4 considered and rejected a fourth.** The ledger also spans tenants —
@@ -571,12 +572,14 @@ flowchart LR
     C1["catalogue-admin.service<br/>approve/reject product<br/>approve/reject listing"] --> R
     A1["admin.service<br/>SUSPEND or REINSTATE a seller"] --> R
     CO["checkout.service<br/>PLACING AN ORDER — added in Phase 4"] --> R
+    FU["fulfilment.service<br/>CANCELLING LINES — added in Phase 5"] --> R
     R["SearchIndexService"] --> WT["withoutTenantScope<br/>— a cross-tenant aggregate"]
     WT --> T[("search_documents")]
     T -.->|"drift test compares<br/>table to view, row for row"| V["search_document_source"]
 
     style A1 fill:#fee,stroke:#c00
     style CO fill:#fee,stroke:#c00
+    style FU fill:#fee,stroke:#c00
 ```
 
 **Suspending a seller is the least obvious one**, and it is highlighted for that
@@ -600,6 +603,14 @@ table against the view row for row. **That test is what makes this list
 verifiable rather than a claim** — and it is why a stale document, which looks
 completely normal because the API answers and the numbers are plausible, is a
 red test instead of a support ticket.
+
+**Cancelling lines is the fifth site, and it moves stock the other way.** Every
+other hook removes something a buyer could find; a cancellation puts the last
+unit back on the shelf, which flips `in_stock` from false to true. Dispatch,
+by contrast, deliberately does NOT reindex: `on_hand` and `reserved` fall
+together, so `available` is unchanged and what a buyer can buy did not move.
+There is a test asserting exactly that, because the next reader will assume it
+was forgotten.
 
 **A write that changes what a buyer would FIND must reindex.**
 
