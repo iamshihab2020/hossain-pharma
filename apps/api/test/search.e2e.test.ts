@@ -26,7 +26,13 @@ const CATEGORY = 'fresh-produce';
 type Session = { accessToken: string; tenantId: string };
 type Facet = { value: string; label: string; count: number };
 type SearchBody = {
-  items: { slug: string; name: string; brand: string | null; price: { amount: number } | null }[];
+  items: {
+    slug: string;
+    name: string;
+    brand: string | null;
+    price: { amount: number } | null;
+    sellerCount: number;
+  }[];
   total: number;
   nextCursor: string | null;
   facets: {
