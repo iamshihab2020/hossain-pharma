@@ -9,6 +9,10 @@ const repoRoot = join(here, '..', '..', '..');
 
 loadEnv({ path: join(here, '..', '.env.e2e') });
 
+/** Shared with `fixtures/actors.ts`. The demo password the seed also uses. */
+const SELLER_EMAIL = 'e2e-seller@example.test';
+const SELLER_ORG_SLUG = 'bengal-tech';
+
 /**
  * One clean database per RUN, not per test.
  *
@@ -32,6 +36,17 @@ loadEnv({ path: join(here, '..', '.env.e2e') });
 function resetDatabase(): void {
   assertTestDatabase();
 
+  // TRUNCATE, not DROP SCHEMA.
+  //
+  // Dropping and recreating the schema invalidates every object the running
+  // API still holds a pooled connection against, and `reuseExistingServer`
+  // means a server from the previous run can still be alive while this
+  // executes. That produced a suite that passed, then failed three tests, then
+  // passed again - including the smoke tests, which only ask /health.
+  //
+  // Truncating leaves the schema intact, so cached plans and pooled
+  // connections stay valid, and it is faster. `db:push` below then does nothing
+  // on a warm database and creates everything on a cold one.
   run([
     'exec',
     'nexmarket-postgres-e2e',
@@ -41,15 +56,46 @@ function resetDatabase(): void {
     '-d',
     'nexmarket_e2e',
     '-c',
-    // BOTH schemas. Drizzle keeps its migration journal in `drizzle`, not
-    // `public`, so dropping only public deletes every table while leaving the
-    // bookkeeping saying all fifteen migrations are applied - and the next
-    // `db:push` does nothing, reports success, and the seed then fails on
-    // `relation "countries" does not exist`.
-    'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; DROP SCHEMA IF EXISTS drizzle CASCADE;',
+    `DO $$
+     DECLARE t text;
+     BEGIN
+       FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+       LOOP
+         EXECUTE format('TRUNCATE TABLE public.%I RESTART IDENTITY CASCADE', t);
+       END LOOP;
+     END $$;`,
   ]);
 
-  // Re-grant, because DROP SCHEMA took the app role's privileges with it.
+  runPnpm(['db:push']);
+  runPnpm(['seed']);
+  grantSellerAccess();
+}
+
+/**
+ * A seller who owns exactly ONE organisation.
+ *
+ * The base seed's memberships cover acme-electronics, meridian-fashion and
+ * northwind-home. The DEMO market - bengal-tech and its three rivals - has
+ * nobody in it at all, so no one can sign in and fulfil an order placed against
+ * it, which is the whole of the fulfilment journey.
+ *
+ * ONE organisation, deliberately: the seller console resolves the acting org as
+ * the first one you belong to, so a user in four orgs would land on whichever
+ * `/orgs/mine` happened to return first and the journey would fulfil a
+ * different seller's order on a bad day.
+ *
+ * Done here rather than in the seed because the seed is shared - `seed.test.ts`
+ * asserts its counts and the API suite reads its fixtures - and this database
+ * is dropped in ninety seconds.
+ *
+ * Runs as the postgres SUPERUSER, which bypasses RLS outright. FORCE ROW LEVEL
+ * SECURITY binds the table owner; it does not bind a superuser.
+ */
+function grantSellerAccess(): void {
+  const password =
+    '$argon2id$v=19$m=19456,t=2,p=1$thRx5qdwb4uDzOSyD10+Nw$' +
+    'Hp0PmQOH1+1TFthjxCywCpcYHWtB9KTCWsbwCWWmCRc';
+
   run([
     'exec',
     'nexmarket-postgres-e2e',
@@ -58,12 +104,16 @@ function resetDatabase(): void {
     'postgres',
     '-d',
     'nexmarket_e2e',
-    '-f',
-    '/docker-entrypoint-initdb.d/01-app-role.sql',
+    '-c',
+    `INSERT INTO users (email, display_name, password_hash, platform_role)
+     VALUES ('${SELLER_EMAIL}', 'E2E Seller', '${password}', 'BUYER')
+     ON CONFLICT (email) DO NOTHING;
+     INSERT INTO org_members (tenant_id, user_id, role)
+     SELECT o.id, u.id, 'OWNER'
+       FROM organisations o, users u
+      WHERE o.slug = '${SELLER_ORG_SLUG}' AND u.email = '${SELLER_EMAIL}'
+     ON CONFLICT DO NOTHING;`,
   ]);
-
-  runPnpm(['db:push']);
-  runPnpm(['seed']);
 }
 
 /**
