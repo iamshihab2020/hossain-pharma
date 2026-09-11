@@ -4,6 +4,7 @@ import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import { decodeCursor, toPage, type Page } from '../../common/pagination.js';
 import { getRequestContext } from '../../common/request-context.js';
 import { OrderEventsService } from '../fulfilment/order-events.service.js';
+import type { PaymentMethod } from '../payments/payment-provider.port.js';
 
 export type OrderItemView = {
   id: string;
@@ -60,6 +61,22 @@ export type OrderDetailView = OrderView & {
   shippingAddress: Record<string, unknown>;
   shipments: OrderShipmentView[];
   timeline: OrderTimelineEntry[];
+
+  /**
+   * How the buyer is paying, on the DETAIL view only.
+   *
+   * Here because status alone cannot answer "may this be accepted?". A cash
+   * order sits at PENDING_PAYMENT until the courier comes back, and shipping
+   * before the money arrives is what cash on delivery means - but a CARD order
+   * at PENDING_PAYMENT is one nobody paid for. Two orders, one status, opposite
+   * answers, and `FulfilmentService.assertPayableOrCod` is the server-side half
+   * of exactly this distinction.
+   *
+   * Without it the seller console had to guess, and guessed PAID - so a cash
+   * order could be placed and never accepted, which is the whole of COD dead in
+   * a browser while every API test passed.
+   */
+  paymentMethod: PaymentMethod;
 };
 
 export type OrderView = {
@@ -199,9 +216,16 @@ export class OrdersService {
         currency: schema.orders.currency,
         placedAt: schema.orders.placedAt,
         shippingAddress: schema.orders.shippingAddress,
+        // The intent's PROVIDER is the payment method. One join, on the detail
+        // view only - the list renders twenty orders and does not need it.
+        paymentProvider: schema.paymentIntents.provider,
       })
       .from(schema.orders)
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.orders.tenantId))
+      .innerJoin(
+        schema.paymentIntents,
+        eq(schema.paymentIntents.id, schema.orders.paymentIntentId),
+      )
       .where(eq(schema.orders.id, id))
       .limit(1);
 
@@ -221,6 +245,10 @@ export class OrdersService {
       shippingAddress: (row.shippingAddress ?? {}) as Record<string, unknown>,
       shipments,
       timeline,
+      // Anything that is not the cash adapter is a prepaid method, and the only
+      // question any reader asks of this is "is it cash?". Widening the union
+      // when a real gateway lands is a change here and nowhere else.
+      paymentMethod: row.paymentProvider === 'cod' ? 'cod' : 'mock',
     };
   }
 

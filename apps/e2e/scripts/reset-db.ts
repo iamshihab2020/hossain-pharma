@@ -13,6 +13,13 @@ loadEnv({ path: join(here, '..', '.env.e2e') });
 const SELLER_EMAIL = 'e2e-seller@example.test';
 const SELLER_ORG_SLUG = 'bengal-tech';
 
+/** Shared with `journeys/logistics.spec.ts`, which reads both numbers off the
+ *  warehouses page and buys more than the first building holds. */
+const SECOND_WAREHOUSE = 'Bengal Tech · Tongi';
+const SPLIT_SKU = 'RN14-8-256-BLK';
+const FIRST_WAREHOUSE_UNITS = 3;
+const SECOND_WAREHOUSE_UNITS = 11;
+
 /**
  * One clean database per RUN, not per test.
  *
@@ -69,6 +76,7 @@ function resetDatabase(): void {
   runPnpm(['db:push']);
   runPnpm(['seed']);
   grantSellerAccess();
+  splitSellerStock();
 }
 
 /**
@@ -113,6 +121,69 @@ function grantSellerAccess(): void {
        FROM organisations o, users u
       WHERE o.slug = '${SELLER_ORG_SLUG}' AND u.email = '${SELLER_EMAIL}'
      ON CONFLICT DO NOTHING;`,
+  ]);
+}
+
+/**
+ * A SECOND BUILDING, holding most of one listing's stock.
+ *
+ * The demo seed gives every seller exactly one warehouse, which makes
+ * multi-warehouse allocation - half of PRD S3 - unwalkable: there is nowhere
+ * for a split to go. This moves eleven of the fourteen Redmi units to a second
+ * address at a lower priority, leaving three in the default one.
+ *
+ * Three is the number that matters. The logistics journey buys FOUR, so the
+ * order cannot be filled from one building and the allocator has to spread -
+ * which is precisely what Phase 4 could not do, where a single inventory row
+ * had to hold the whole quantity while `listings.available_stock` went on
+ * advertising the sum. Buying four is that bug's regression test, seen from a
+ * browser.
+ *
+ * The TOTAL is unchanged at fourteen, so `listings.available_stock` stays
+ * correct and the buy box still ranks the way `buyer.spec.ts` expects.
+ *
+ * Here rather than in the seed for the same reason `grantSellerAccess` is:
+ * `seed.test.ts` asserts the seed's counts and the API suite reads its
+ * fixtures, and this database is deleted in ninety seconds.
+ *
+ * Runs as the postgres SUPERUSER, which bypasses RLS outright. FORCE ROW LEVEL
+ * SECURITY binds the table owner; it does not bind a superuser.
+ */
+function splitSellerStock(): void {
+  run([
+    'exec',
+    'nexmarket-postgres-e2e',
+    'psql',
+    '-U',
+    'postgres',
+    '-d',
+    'nexmarket_e2e',
+    '-c',
+    `INSERT INTO warehouses
+       (tenant_id, name, pincode, address_line, city, district, country_code, priority, is_default)
+     SELECT o.id, '${SECOND_WAREHOUSE}', '1710', '4 Cherag Ali', 'Tongi', 'Gazipur', 'BD', 1, false
+       FROM organisations o
+      WHERE o.slug = '${SELLER_ORG_SLUG}'
+     ON CONFLICT (tenant_id, name) DO NOTHING;
+
+     UPDATE inventory_items i
+        SET on_hand = ${FIRST_WAREHOUSE_UNITS}
+       FROM listings l
+       JOIN product_variants v ON v.id = l.variant_id
+       JOIN organisations o ON o.id = l.tenant_id
+      WHERE i.listing_id = l.id
+        AND o.slug = '${SELLER_ORG_SLUG}'
+        AND v.sku = '${SPLIT_SKU}';
+
+     INSERT INTO inventory_items (tenant_id, listing_id, warehouse_id, on_hand, reserved)
+     SELECT l.tenant_id, l.id, w.id, ${SECOND_WAREHOUSE_UNITS}, 0
+       FROM listings l
+       JOIN product_variants v ON v.id = l.variant_id
+       JOIN organisations o ON o.id = l.tenant_id
+       JOIN warehouses w ON w.tenant_id = o.id AND w.name = '${SECOND_WAREHOUSE}'
+      WHERE o.slug = '${SELLER_ORG_SLUG}'
+        AND v.sku = '${SPLIT_SKU}'
+     ON CONFLICT (listing_id, warehouse_id) DO NOTHING;`,
   ]);
 }
 

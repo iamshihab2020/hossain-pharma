@@ -63,11 +63,26 @@ export class TrackingService {
      * The time-compressed schedule still drives the mock when no type is given,
      * so a demo left running walks a parcel through the states on its own.
      */
-    const scheduled = this.carrier.eventsSoFar(trackingNumber, now);
     const history =
       upTo === undefined
-        ? scheduled
-        : this.carrier.eventsUpTo(trackingNumber, upTo, now);
+        ? this.carrier.eventsSoFar(trackingNumber, now)
+        : /**
+           * A NAMED event needs no schedule, and this is where that stops being
+           * a comment and starts being behaviour.
+           *
+           * The mock's history is decoded from the tracking number it minted,
+           * so it has nothing to say about a number it did not: a seller who
+           * types "PT-9912" into the console and hands the box to a rider owns
+           * a parcel this adapter cannot date. That is every parcel dispatched
+           * by hand, which is every parcel with a console behind it.
+           *
+           * Refusing those was the paragraph above contradicting itself - the
+           * carrier told us where the parcel is, and we answered "no events for
+           * that tracking number" about a parcel we can find by that very
+           * number, one line further down. So when the carrier names the state
+           * and the schedule has nothing, the reported state IS the history.
+           */
+          orReported(this.carrier.eventsUpTo(trackingNumber, upTo, now), upTo, now);
 
     if (history.length === 0) {
       return { applied: false, reason: 'no events for that tracking number' };
@@ -227,6 +242,43 @@ type ParcelRow = {
  * is a deliberate renumbering rather than a silent reordering of everything
  * after it.
  */
+/**
+ * The carrier's word, when there is no schedule to read.
+ *
+ * Every state up to and including the reported one, all stamped NOW - because
+ * that is honestly all we know. A parcel reported OUT_FOR_DELIVERY certainly
+ * passed through a hub, and the timeline should say so rather than jumping; but
+ * nobody told us when, and inventing earlier timestamps would put fiction in an
+ * append-only log. `apply` records only the states the parcel had not already
+ * passed, so a normal sequence of webhooks still writes one entry each.
+ */
+function orReported(
+  scheduled: readonly TrackingEvent[],
+  upTo: TrackingEventType,
+  now: Date,
+): TrackingEvent[] {
+  if (scheduled.length > 0) return [...scheduled];
+
+  const cut = RANK[upTo];
+  return (Object.keys(RANK) as TrackingEventType[])
+    .filter((type) => RANK[type] <= cut)
+    .sort((a, b) => RANK[a] - RANK[b])
+    .map((type) => ({
+      type,
+      occurredAt: now,
+      description: REPORTED[type],
+      location: 'Reported by the carrier',
+    }));
+}
+
+/** Plain descriptions for a carrier that sent a state and no prose. */
+const REPORTED: Record<TrackingEventType, string> = {
+  DISPATCHED: 'Picked up from the seller',
+  IN_TRANSIT: 'On its way',
+  OUT_FOR_DELIVERY: 'Out for delivery',
+  DELIVERED: 'Delivered',
+};
+
 const RANK: Record<TrackingEventType, number> = {
   DISPATCHED: 0,
   IN_TRANSIT: 1,

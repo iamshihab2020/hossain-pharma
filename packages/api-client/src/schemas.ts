@@ -684,6 +684,18 @@ export const orderDetailSchema = orderViewSchema.extend({
     .loose(),
   shipments: z.array(shipmentViewSchema),
   timeline: z.array(orderEventSchema),
+
+  /**
+   * How the buyer is paying. DETAIL ONLY - the list shows twenty orders and
+   * has no question that needs it.
+   *
+   * On the view because status alone cannot answer "may the seller accept
+   * this?". A cash order waits at PENDING_PAYMENT until the courier comes
+   * back, and shipping before the money arrives is what cash on delivery
+   * means; a CARD order at PENDING_PAYMENT is one nobody paid for. Same
+   * status, opposite answers.
+   */
+  paymentMethod: paymentMethodSchema,
 });
 export type OrderDetail = z.infer<typeof orderDetailSchema>;
 

@@ -209,6 +209,59 @@ describe('an order allocates across two warehouses', () => {
     expect(new Set(origins.map((row) => row.warehouseId)).size).toBe(2);
   });
 
+  it('lets a seller pack ONE box by hand from two buildings', async () => {
+    /**
+     * The manual path, which is the only one with a console behind it.
+     *
+     * `autoDispatch` plans a parcel per warehouse and names each one, so it
+     * never asks a single inventory row for more than it holds. A seller
+     * pressing "dispatch parcel" names nothing, and Phase 6 left that path
+     * requiring one row to cover the whole line - the identical shape of the
+     * bug it had just fixed in RESERVATION. Four units held as three plus one
+     * matched no row, and the console answered "that is more than this order
+     * has left" about an order with four units left.
+     *
+     * Reserving across buildings while being unable to ship across them is
+     * worse than never splitting at all: the order is taken and then cannot
+     * move.
+     */
+    const { orderId } = await paidOrder('split-manual', 4, await splittableListing('split-manual'));
+    await accept(orderId);
+
+    const detail = await asSeller('GET', `/seller/orders/${orderId}`);
+    const itemId = json<{ items: { id: string }[] }>(detail).items[0]?.id;
+    if (itemId === undefined) throw new Error('fixture: no order item');
+
+    const res = await asSeller('POST', `/seller/orders/${orderId}/shipments`, {
+      items: [{ orderItemId: itemId, quantity: 4 }],
+      idempotencyKey: `${NS}-split-manual`,
+      carrierName: 'Pathao',
+      trackingNumber: `${NS}-MANUAL-1`,
+    });
+    expect(res.statusCode).toBe(201);
+
+    // ONE parcel, because the seller packed one box - the split is in where the
+    // units came from, not in how many boxes left.
+    const after = await asSeller('GET', `/seller/orders/${orderId}`);
+    expect(json<{ status: string }>(after).status).toBe('SHIPPED');
+
+    // And BOTH buildings gave up stock. A single row covering all four would
+    // mean the allocator's split was ignored and some other order's
+    // reservation was spent instead.
+    const rows = await withTenant({ tenantId: null, userId: null, isAdmin: true }, (tx) =>
+      tx
+        .select({
+          warehouseId: schema.orderItemAllocations.warehouseId,
+          quantity: schema.orderItemAllocations.quantity,
+        })
+        .from(schema.orderItemAllocations)
+        .where(eq(schema.orderItemAllocations.orderItemId, itemId)),
+    );
+    expect(rows).toHaveLength(2);
+    // Every allocation spent, none left holding units that already shipped.
+    expect(rows.every((row) => row.quantity === 0)).toBe(true);
+  });
+
   it('is idempotent per PARCEL, so a retry creates none of them twice', async () => {
     const { orderId } = await paidOrder('split-retry', 4, await splittableListing('split-retry'));
     await accept(orderId);
@@ -315,6 +368,55 @@ describe('mock tracking emits a full event timeline', () => {
       (entry) => entry.type === 'SHIPMENT_DELIVERED',
     );
     expect(delivered).toHaveLength(1);
+  });
+
+  it("takes the carrier's word on a tracking number the mock never minted", async () => {
+    /**
+     * A seller types their own number into the console and hands the box to a
+     * rider. That is every manually dispatched parcel, and the mock cannot date
+     * one: its history is decoded from the number IT issued.
+     *
+     * Refusing those made the service contradict itself - it answered "no
+     * events for that tracking number" about a parcel it finds by that very
+     * number one line further down. When the carrier NAMES the state, the
+     * reported state is the history; only the time-compressed fallback needs a
+     * number the mock minted.
+     */
+    const { orderId } = await paidOrder('tracking-manual', 1);
+    await accept(orderId);
+
+    const detail = await asSeller('GET', `/seller/orders/${orderId}`);
+    const itemId = json<{ items: { id: string }[] }>(detail).items[0]?.id;
+    if (itemId === undefined) throw new Error('fixture: no order item');
+
+    const trackingNumber = `PT-${NS}-MANUAL`;
+    await asSeller('POST', `/seller/orders/${orderId}/shipments`, {
+      items: [{ orderItemId: itemId, quantity: 1 }],
+      idempotencyKey: `${NS}-tracking-manual`,
+      carrierName: 'Pathao',
+      trackingNumber,
+    });
+    // Nothing the mock can read: no NM prefix, no encoded booking time.
+    expect(carrier.eventsSoFar(trackingNumber, new Date())).toEqual([]);
+
+    const applied = await carrierWebhook(trackingNumber, 'OUT_FOR_DELIVERY');
+    expect(applied.statusCode).toBe(200);
+    expect(json<{ applied: boolean }>(applied).applied).toBe(true);
+
+    const moved = await asSeller('GET', `/seller/orders/${orderId}`);
+    const body = json<{ status: string; timeline: { type: string }[] }>(moved);
+    expect(body.status).toBe('OUT_FOR_DELIVERY');
+
+    // The states it passed through, not just the one reported. A parcel that
+    // jumps straight there loses what the timeline exists to show.
+    const types = body.timeline.map((entry) => entry.type);
+    expect(types).toContain('SHIPMENT_IN_TRANSIT');
+    expect(types).toContain('SHIPMENT_OUT_FOR_DELIVERY');
+
+    // And it is still replay-safe: a state already passed changes nothing.
+    const replay = await carrierWebhook(trackingNumber, 'IN_TRANSIT');
+    expect(replay.statusCode).toBe(200);
+    expect(json<{ applied: boolean }>(replay).applied).toBe(false);
   });
 
   it('refuses a forged signature, and answers 200 so no retry storm starts', async () => {

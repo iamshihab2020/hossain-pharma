@@ -266,10 +266,7 @@ export class FulfilmentService {
     for (const pick of input.items) {
       const line = byId.get(pick.orderItemId);
       if (line === undefined) continue;
-      await this.dispatchStock(tx, line.listingId, pick.quantity, input.warehouseId);
-      if (input.warehouseId !== undefined) {
-        await this.consumeAllocation(tx, pick.orderItemId, input.warehouseId, pick.quantity);
-      }
+      await this.releaseStock(tx, pick, line.listingId, input.warehouseId);
       // NO reindex here, and that is not an oversight. on_hand and reserved
       // fall TOGETHER, so `available = on_hand - reserved` is unchanged: the
       // goods left the shelf and left their reservation at the same moment, and
@@ -931,6 +928,75 @@ export class FulfilmentService {
       throw new ConflictException(
         `Only ${left} unit(s) of that line are left to ship, and ${pick.quantity} were picked`,
       );
+    }
+  }
+
+  /**
+   * Takes a line's units OFF THE SHELVES THEY WERE HELD ON.
+   *
+   * A named warehouse is `autoDispatch`, which already planned one parcel per
+   * building and is telling us which one this is. No warehouse is the seller
+   * packing a box by hand, and that is where this earns its place: the units
+   * may be held in two places, because Phase 6 taught RESERVATION to spread
+   * across warehouses and did not teach dispatch the same thing. A line of four
+   * held as three plus one then matched no single inventory row, `dispatchStock`
+   * refused it, and the console answered "that is more than this order has
+   * left" about an order that had four units left. Reserving across buildings
+   * and being unable to ship across them is worse than not splitting at all.
+   *
+   * Drawn from `order_item_allocations` rather than from `reserved`, in
+   * warehouse priority order. The reserved counter is a TOTAL with no link to
+   * an order, so spending it by "whichever row holds the most" is how one
+   * order's dispatch consumed another's reservation - the bug this table was
+   * added to make impossible, and one the unscoped statement below still has.
+   *
+   * Anything the allocations cannot cover falls through to that unscoped
+   * statement, which is what orders placed before migration 0019 need: they
+   * recorded no allocations at all, and they must still ship.
+   */
+  private async releaseStock(
+    tx: Transaction,
+    pick: CancelPick,
+    listingId: string,
+    warehouseId?: string,
+  ): Promise<void> {
+    if (warehouseId !== undefined) {
+      await this.dispatchStock(tx, listingId, pick.quantity, warehouseId);
+      await this.consumeAllocation(tx, pick.orderItemId, warehouseId, pick.quantity);
+      return;
+    }
+
+    const held = await tx
+      .select({
+        warehouseId: schema.orderItemAllocations.warehouseId,
+        quantity: schema.orderItemAllocations.quantity,
+      })
+      .from(schema.orderItemAllocations)
+      .innerJoin(
+        schema.warehouses,
+        eq(schema.warehouses.id, schema.orderItemAllocations.warehouseId),
+      )
+      .where(
+        and(
+          eq(schema.orderItemAllocations.orderItemId, pick.orderItemId),
+          sql`${schema.orderItemAllocations.quantity} > 0`,
+        ),
+      )
+      // The seller's own preference, then the id, so the sort is total and one
+      // order splits the same way twice. Same ordering the allocator uses.
+      .orderBy(asc(schema.warehouses.priority), asc(schema.warehouses.id));
+
+    let remaining = pick.quantity;
+    for (const row of held) {
+      if (remaining === 0) break;
+      const take = Math.min(remaining, row.quantity);
+      await this.dispatchStock(tx, listingId, take, row.warehouseId);
+      await this.consumeAllocation(tx, pick.orderItemId, row.warehouseId, take);
+      remaining -= take;
+    }
+
+    if (remaining > 0) {
+      await this.dispatchStock(tx, listingId, remaining);
     }
   }
 

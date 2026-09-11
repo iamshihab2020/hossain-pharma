@@ -13,7 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { canCancel } from '@/lib/order-timeline';
+import { canAccept, canCancel, canReject } from '@/lib/order-timeline';
 
 /**
  * What the seller can do to this order, right now.
@@ -47,6 +47,8 @@ export function FulfilmentPanel({
     outstanding.length > 0 &&
     (order.status === 'ACCEPTED' || order.status === 'PARTIALLY_SHIPPED');
 
+  const acceptable = canAccept(order.status, order.paymentMethod);
+
   return (
     <div className="flex flex-col gap-6">
       {error !== null && (
@@ -55,17 +57,24 @@ export function FulfilmentPanel({
         </p>
       )}
 
-      {order.status === 'PAID' && (
+      {canReject(order.status) && (
         <section className="flex flex-col gap-3">
-          <Button
-            type="button"
-            disabled={pending}
-            onClick={() => {
-              perform(() => acceptOrder(tenantId, order.id));
-            }}
-          >
-            Accept this order
-          </Button>
+          {/* A CASH order is acceptable while still awaiting payment - that is
+              what cash on delivery means - and an unpaid CARD order is not.
+              Same status, and the payment method is what tells them apart. */}
+          {acceptable && (
+            <Button
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                perform(() => acceptOrder(tenantId, order.id));
+              }}
+            >
+              {order.paymentMethod === 'cod'
+                ? 'Accept and collect cash on delivery'
+                : 'Accept this order'}
+            </Button>
+          )}
 
           <form
             action={(form: FormData) => {
@@ -73,8 +82,13 @@ export function FulfilmentPanel({
             }}
             className="flex flex-col gap-2"
           >
+            {/* "Or" only when there is something to say "or" to. An unpaid
+                card order shows no accept button, and a lone "Or decline it"
+                reads as a missing control rather than the only one. */}
             <Label htmlFor="reject-reason" className="text-sm text-muted-foreground">
-              Or decline it, and tell the buyer why
+              {acceptable
+                ? 'Or decline it, and tell the buyer why'
+                : 'This has not been paid for. Decline it, and tell the buyer why'}
             </Label>
             <div className="flex gap-2">
               <Input

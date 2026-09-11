@@ -123,6 +123,7 @@ function serverEnv(): Record<string, string> {
     'API_INTERNAL_URL',
     'FILE_STORAGE_DIR',
     'PAYMENT_WEBHOOK_SECRET',
+    'SHIPPING_WEBHOOK_SECRET',
   ];
 
   const env: Record<string, string> = {};

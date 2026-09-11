@@ -1,7 +1,9 @@
 import type { OrderEvent, ShipmentView } from '@nexmarket/api-client';
 import { describe, expect, it } from 'vitest';
 import {
+  canAccept,
   canCancel,
+  canReject,
   describeEvent,
   describeShipment,
   describeStatus,
@@ -191,5 +193,64 @@ describe('describeStatus', () => {
     expect(describeStatus('SHIPPED').tone).toBe('neutral');
     expect(describeStatus('DELIVERED').tone).toBe('signal');
     expect(describeStatus('REJECTED').tone).toBe('warn');
+  });
+});
+
+describe('canAccept', () => {
+  it('offers a CASH order that is still awaiting payment', () => {
+    // The whole of cash on delivery. The money arrives at the door and the
+    // parcel only reaches the door if somebody ships it, so an order that
+    // cannot be accepted until it is paid for can never be paid for.
+    expect(canAccept('PENDING_PAYMENT', 'cod')).toBe(true);
+  });
+
+  it('refuses a CARD order nobody has paid for', () => {
+    // Same status, opposite answer, and the payment method is the only thing
+    // that separates them. `assertPayableOrCod` is the server-side half.
+    expect(canAccept('PENDING_PAYMENT', 'mock')).toBe(false);
+  });
+
+  it('offers a paid order regardless of how it was paid', () => {
+    expect(canAccept('PAID', 'mock')).toBe(true);
+    expect(canAccept('PAID', 'cod')).toBe(true);
+  });
+
+  it('offers nothing once the order has moved on', () => {
+    for (const status of [
+      'ACCEPTED',
+      'PARTIALLY_SHIPPED',
+      'SHIPPED',
+      'OUT_FOR_DELIVERY',
+      'DELIVERED',
+      'CANCELLED',
+      'REJECTED',
+    ] as const) {
+      expect(canAccept(status, 'cod')).toBe(false);
+      expect(canAccept(status, 'mock')).toBe(false);
+    }
+  });
+});
+
+describe('canReject', () => {
+  it('is wider than accepting: an unpaid card order can still be turned away', () => {
+    // A seller should not have to wait for a payment that may never arrive
+    // before declining. The state machine allows it for any payment method,
+    // and `reject` carries no payment check to match.
+    expect(canReject('PENDING_PAYMENT')).toBe(true);
+    expect(canReject('PAID')).toBe(true);
+  });
+
+  it('closes once the seller has committed', () => {
+    for (const status of [
+      'ACCEPTED',
+      'PARTIALLY_SHIPPED',
+      'SHIPPED',
+      'OUT_FOR_DELIVERY',
+      'DELIVERED',
+      'CANCELLED',
+      'REJECTED',
+    ] as const) {
+      expect(canReject(status)).toBe(false);
+    }
   });
 });

@@ -1,4 +1,9 @@
-import type { OrderEvent, OrderStatus, ShipmentView } from '@nexmarket/api-client';
+import type {
+  OrderEvent,
+  OrderStatus,
+  PaymentMethod,
+  ShipmentView,
+} from '@nexmarket/api-client';
 
 /**
  * The buyer's timeline, as data the component only has to lay out.
@@ -133,6 +138,40 @@ export function describeShipment(shipment: ShipmentView): string {
  */
 export function canCancel(status: OrderStatus): boolean {
   return status === 'PENDING_PAYMENT' || status === 'PAID' || status === 'ACCEPTED';
+}
+
+/**
+ * Whether the seller may accept this order right now.
+ *
+ * NOT `status === 'PAID'`, which is what this used to be and what made cash on
+ * delivery unusable through a browser. A COD order stays PENDING_PAYMENT until
+ * the courier hands the money back, collection happens at the door, and the
+ * parcel only reaches the door if somebody ships it - so gating on PAID meant
+ * a cash order could be placed and then never accepted, never shipped, never
+ * collected. Every API test passed, because the API had already allowed the
+ * edge.
+ *
+ * The payment method is what separates the two orders that share that status,
+ * and it is the same distinction `FulfilmentService.assertPayableOrCod` makes
+ * server-side. Mirroring it here rather than guessing is the rule this file
+ * already follows for `canCancel`: the server refuses anything else with a
+ * 409, and a button that produces an error is worse than no button.
+ */
+export function canAccept(status: OrderStatus, paymentMethod: PaymentMethod): boolean {
+  if (status === 'PAID') return true;
+  return status === 'PENDING_PAYMENT' && paymentMethod === 'cod';
+}
+
+/**
+ * Whether the seller may still decline it.
+ *
+ * Wider than accepting, and deliberately so: an unpaid CARD order is one a
+ * seller should be able to turn away without waiting for a payment that may
+ * never arrive. The state machine allows PENDING_PAYMENT -> REJECTED for any
+ * order, and `reject` carries no payment check to match.
+ */
+export function canReject(status: OrderStatus): boolean {
+  return status === 'PENDING_PAYMENT' || status === 'PAID';
 }
 
 /** Status as a buyer reads it. Never the enum. */

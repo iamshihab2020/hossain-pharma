@@ -149,10 +149,23 @@ API suite already proves to the minor unit — an E2E suite that re-tests the
 ledger is an E2E suite that breaks whenever the ledger changes, for no
 additional information.
 
-**S3, the logistics journey**, is Phase 6 in its entirety - pincode
-serviceability, zone rates, slot selection, multi-warehouse allocation, COD
-collection. Nothing of it exists to walk. It gets a third spec file when Phase 6
-does.
+**`journeys/logistics.spec.ts`** - S3, written once Phase 6 landed. An
+anonymous visitor checks three postcodes on the product page and gets three
+different answers (unserviceable, delivered-but-no-cash, delivered with a
+rate); a buyer takes four units of a line held three-in-one-building and
+eleven-in-another, picks a delivery window, and pays in CASH; the seller
+accepts an order still sitting at PENDING_PAYMENT, ships it, and watches both
+warehouses' unit counts fall; a courier walks it to the door over the webhook;
+and the money reconciles on the seller's own screen.
+
+It found three defects on its first run, all of them the same shape - Phase 6
+taught the API something and left a surface behind. The console gated "accept"
+on PAID, so a cash order could be placed and never fulfilled. Dispatch still
+required a single inventory row to hold a whole line, so an order legitimately
+reserved across two buildings could not ship. And tracking refused any event
+about a parcel whose number the mock had not minted, which is every parcel a
+seller dispatches by hand. None was reachable from the API suite, because each
+one was the seam between two layers that each tested green alone.
 
 ### Browsers
 
@@ -330,5 +343,4 @@ Playwright's browsers are cached by version key; a cold CI run downloads about
 | Cross-browser locally | The RAM is not there. CI has it |
 | Load testing search | The search benchmark already exists, measures the right thing, and has its own job |
 | S2's review, return and refund steps | Phases 7 and 8. The spec file names them where they will be appended |
-| S3, the logistics journey | Phase 6 in its entirety. Nothing of it exists to walk |
 | Component tests for all nine | Five have behaviour worth asserting; the rest are markup and get tests when they grow logic |

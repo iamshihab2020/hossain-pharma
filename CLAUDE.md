@@ -243,14 +243,31 @@ recreating the database.
   adapter stays a pure function and the checkout path keeps one lookup rather than one per
   seller group. `ShippingProvider` (booking and tracking) is a SEPARATE port for the
   opposite reason: it talks to somebody else's network, after the money has moved.
+- **Reservation and DISPATCH both spread; teaching one and not the other is worse than
+  neither.** Phase 6 taught `reserve()` to take units from several warehouses and left
+  `dispatchStock` demanding a single row, so a line reserved as three-plus-one matched
+  nothing and the console answered "that is more than this order has left" about an order
+  with four units left. The order could be taken and then could not move. `releaseStock`
+  draws from `order_item_allocations` in warehouse priority order for exactly this reason,
+  and only falls back to the unscoped statement for orders placed before migration 0019,
+  which recorded no allocations at all.
 - **Carrier events are idempotent by COMPARISON, not by a unique index.** Shipment states
   are totally ordered, and an event not ahead of where the parcel already is does nothing.
   Money cannot work this way - two captures of the same amount are not one capture - which
   is why the payment webhook uses a constraint instead.
+- **A carrier that NAMES the event needs no schedule.** The mock decodes a parcel's history
+  from the tracking number it minted, so it has nothing to say about a number a seller
+  typed - which is every manually dispatched parcel. Refusing those made `TrackingService`
+  answer "no events for that tracking number" about a parcel it finds by that very number
+  one line later. The time-compressed schedule is the FALLBACK for a carrier that reports
+  no type; a reported state is a fact and stands on its own.
 - **A COD order may be ACCEPTED while still PENDING_PAYMENT.** Shipping before the money
   arrives is what cash on delivery means. `order-state.ts` allows the edge and knows
   nothing about payment methods; `FulfilmentService.accept` is what refuses a card order
-  that was never paid for.
+  that was never paid for. **The console has to make the same distinction**, which is why
+  `OrderDetail` carries `paymentMethod` at all: gating the accept button on `PAID` - which
+  is what it did until the S3 journey pressed it - meant a cash order could be placed and
+  then never accepted, never shipped, and so never collected, with every API test green.
 
 ### Money
 
