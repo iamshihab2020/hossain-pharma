@@ -133,8 +133,13 @@ export default async function OrderDetailPage({ params }: Params): Promise<React
             <Row label="Subtotal" value={formatMoney(order.subtotal)} />
             <Row label="Delivery" value={formatMoney(order.shipping)} />
             <Row label="VAT" value={formatMoney(order.tax)} />
-            <Separator className="my-1" />
-            <div className="flex justify-between gap-4">
+            {/* A BORDER on the total row, not a <Separator> between the rows.
+                A separator renders role="none", and a dl may not have one as a
+                direct child - axe rates it serious, because the element that
+                divides the list also breaks the term/definition pairing a
+                screen reader walks. The invoice page already drew its total
+                this way; this one now matches it. */}
+            <div className="flex justify-between gap-4 border-t border-border pt-3">
               <dt className="font-medium">Total</dt>
               <dd className="text-lg font-semibold tabular">{formatMoney(order.total)}</dd>
             </div>

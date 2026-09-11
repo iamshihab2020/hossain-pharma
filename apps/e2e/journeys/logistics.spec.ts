@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { expectNoSeriousA11yViolations } from '../a11y/scan.js';
 import { registerBuyer, signIn } from '../fixtures/actors.js';
 import { reportCarrierEvent, signedCarrierPost, type CarrierEvent } from '../fixtures/carrier.js';
 
@@ -109,6 +110,11 @@ test('a cash order crosses two warehouses, a courier, and the reconciliation scr
   // evidence that the click landed rather than scrolled.
   await expect(page.getByRole('button', { name: /clear the window/i })).toBeVisible();
 
+  // THE SLOT PICKER, specifically. `sr-only` radios inside styled labels is
+  // exactly the pattern that looks right and strands a keyboard user, and it
+  // is only on screen once an address resolves to a domestic zone.
+  await expectNoSeriousA11yViolations(page, 'checkout with a slot picker');
+
   // COD is the DEFAULT in a zone that allows it - PRD 10.1's point that cash is
   // how most of this market pays, not a fallback - so the button reads "Place
   // order" rather than "Pay and place order" without anything being clicked.
@@ -197,6 +203,10 @@ test('a cash order crosses two warehouses, a courier, and the reconciliation scr
   // two makes the number useless for the question the screen exists to answer.
   const row = page.getByRole('row').filter({ hasText: orderNumber });
   await expect(row).toBeVisible();
+
+  // A dense console table of money, which is where a screen reader needs the
+  // column headers to be doing their job.
+  await expectNoSeriousA11yViolations(page, 'cash on delivery');
 
   const expected = await figure(page, 'Expected').innerText();
   await expect(figure(page, 'Outstanding')).toHaveText(expected);

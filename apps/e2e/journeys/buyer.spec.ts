@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { expectNoSeriousA11yViolations } from '../a11y/scan.js';
 import { fillAddress, registerBuyer } from '../fixtures/actors.js';
 
 /**
@@ -37,6 +38,10 @@ test('a basket spanning three sellers becomes three orders', async ({ page }) =>
   // match hits both and Playwright refuses to guess.
   await expect(page.getByText(/^Ranked by delivered price\./)).toBeVisible();
 
+  // PRD S10, on the page that carries the most of this product's meaning: a
+  // comparison table a screen reader has to be able to read as a comparison.
+  await expectNoSeriousA11yViolations(page, 'product page');
+
   // Rows carry radio semantics: selecting one is what the Add button acts on.
   const offers = page.getByRole('radio');
   expect(await offers.count()).toBeGreaterThanOrEqual(3);
@@ -52,12 +57,17 @@ test('a basket spanning three sellers becomes three orders', async ({ page }) =>
 
   await page.goto('/cart');
   await expect(page.getByText(/3 sellers/i)).toBeVisible();
+  await expectNoSeriousA11yViolations(page, 'cart');
 
   // --- checkout ------------------------------------------------------------
   await page.getByRole('link', { name: /checkout/i }).click();
   await expect(page).toHaveURL(/\/checkout/);
 
   await fillAddress(page);
+  // AFTER the address is saved, so the scan sees the payment panel rather than
+  // the form that precedes it - two different screens at one URL.
+  await expectNoSeriousA11yViolations(page, 'checkout');
+
   await page.getByRole('button', { name: /place order|pay and place order/i }).click();
 
   // --- three orders --------------------------------------------------------

@@ -116,7 +116,7 @@ themes are designed sets — the dark palette is not the light one inverted.
 | `ground` | `#EFF1F0` | `#0A100F` | The page. Surfaces sit above it, so they need no shadow to separate. |
 | `surface` | `#FFFFFF` | `#121A18` | Cards, tables, sheets. |
 | `ink` | `#0D1F1C` | `#E7EEEC` | Text. The darkest tint of the brand, not black — black on a green-grey ground reads as a hole punched in the page. |
-| `muted` | `#5B6B68` | `#93A5A1` | Secondary text, sticker prices, metadata. AA at 14px on both grounds. |
+| `muted` | `#576663` | `#93A5A1` | Secondary text, sticker prices, metadata. AA at 14px on every surface it is used on - page, `card`, `sunk` and `wash` - which is now asserted by axe in the E2E journeys rather than claimed. It was `#5B6B68` until that scan measured it at 4.39:1 on `sunk`. |
 | `signal` | `#0A5C55` | `#63C7B7` | Primary action, focus ring, buy-box winner. Nothing decorative. |
 | `warn` | `#8A5200` | `#D7A25A` | Low stock, price changed, payment pending. The only warm colour, and **it never means "sale"**. |
 

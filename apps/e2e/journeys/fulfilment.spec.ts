@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { expectNoSeriousA11yViolations } from '../a11y/scan.js';
 import { fillAddress, registerBuyer, signIn } from '../fixtures/actors.js';
 import { settlePayment } from '../fixtures/gateway.js';
 
@@ -81,6 +82,10 @@ test('a seller ships part of an order and the buyer watches it move', async ({
 
   await page.goto('/seller/orders');
   await expect(page.getByRole('heading', { name: /orders to fulfil/i })).toBeVisible();
+  // Not buyer-facing, so outside S10's letter - included because the browser is
+  // already here and a console nobody can operate by keyboard is still a
+  // console somebody cannot do their job in.
+  await expectNoSeriousA11yViolations(page, 'seller queue');
   await page.getByRole('link', { name: orderNumber }).click();
 
   await page.getByRole('button', { name: /accept this order/i }).click();
@@ -134,6 +139,7 @@ test('a seller ships part of an order and the buyer watches it move', async ({
   // card, where it is the most useful string on the page once a box is moving,
   // and in the timeline entry that records the dispatch. Asserting both is
   // stronger than picking one and is why this is not a `.first()`.
+  await expectNoSeriousA11yViolations(page, 'order detail');
   await expect(page.getByText(/Dispatched with Pathao/i)).toBeVisible();
   await expect(page.getByText('PT-E2E-1', { exact: true })).toBeVisible();
   await expect(page.getByText('Tracking PT-E2E-1')).toBeVisible();

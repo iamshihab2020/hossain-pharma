@@ -40,7 +40,13 @@
     --secondary-foreground: 170 41% 9%;
 
     --muted: 155 10% 90%;
-    --muted-foreground: 169 8% 39%;
+    /* 37%, not 39%. At 39% this measured 4.39:1 against `sunk` - the surface
+       every table header and every inset panel uses - which is below AA at
+       14px, and the design direction claimed AA "on both grounds" without
+       anyone having measured the second one. axe found it the first time it
+       ran. 37% clears it at 4.73:1 with a step of headroom, and still reads as
+       secondary next to `foreground` at 5.31:1 on the page. */
+    --muted-foreground: 169 8% 37%;
 
     --accent: 155 12% 88%;
     --accent-foreground: 170 41% 9%;
