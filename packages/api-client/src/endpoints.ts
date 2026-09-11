@@ -12,6 +12,17 @@ import {
   ordersResponse,
   shipmentViewSchema,
   productPageSchema,
+  serviceabilitySchema,
+  deliverySlotsResponse,
+  warehousesResponse,
+  warehouseSchema,
+  codReconciliationSchema,
+  codRowsResponse,
+  codCollectionSchema,
+  returnPickupSchema,
+  returnPickupsResponse,
+  dispatchPlanSchema,
+  autoDispatchSchema,
   quoteSchema,
   searchResultSchema,
   similarResponse,
@@ -42,6 +53,21 @@ export type Endpoint<T> = {
 
 function endpoint<T>(path: string, schema: z.ZodType<T>): Endpoint<T> {
   return { path, schema };
+}
+
+export type ServiceabilityQuery = {
+  postcode: string;
+  country?: string;
+  weightGrams?: number;
+  dispatchDays?: number;
+};
+
+function serviceabilityQueryString(query: ServiceabilityQuery): string {
+  const params = new URLSearchParams({ postcode: query.postcode });
+  if (query.country !== undefined) params.set('country', query.country);
+  if (query.weightGrams !== undefined) params.set('weightGrams', String(query.weightGrams));
+  if (query.dispatchDays !== undefined) params.set('dispatchDays', String(query.dispatchDays));
+  return `?${params.toString()}`;
 }
 
 export type SearchQuery = {
@@ -103,6 +129,27 @@ export const endpoints = {
   suggest: (term: string) =>
     endpoint(`/search/suggest?q=${encodeURIComponent(term)}`, suggestResponse),
 
+  /**
+   * Serviceability by postcode, for the product page's delivery check.
+   *
+   * PUBLIC, and it has to be: PRD 8.4 puts this BEFORE add-to-cart, for a
+   * visitor with no session and no address book. `weightGrams` is optional
+   * because a rate without a weight is a guess - omit it and the answer carries
+   * the zone and the estimate but no price.
+   */
+  serviceability: (query: ServiceabilityQuery) =>
+    endpoint(`/serviceability${serviceabilityQueryString(query)}`, serviceabilitySchema),
+
+  /**
+   * Delivery windows for a postcode. PUBLIC, like serviceability beside it:
+   * a window a buyer can be offered is part of the answer to "when".
+   */
+  deliverySlots: (postcode: string, country = 'BD') =>
+    endpoint(
+      `/delivery-slots?postcode=${encodeURIComponent(postcode)}&country=${encodeURIComponent(country)}`,
+      deliverySlotsResponse,
+    ),
+
   // ---- cart (public, guest or member) ---------------------------------------
   cart: () => endpoint('/cart', cartViewSchema),
   cartItems: () => endpoint('/cart/items', cartViewSchema),
@@ -124,6 +171,12 @@ export const endpoints = {
       ordersResponse,
     ),
   order: (id: string) => endpoint(`/me/orders/${encodeURIComponent(id)}`, orderDetailSchema),
+
+  /** Reverse logistics: the buyer books a courier to collect a delivered order. */
+  scheduleReturnPickup: (orderId: string) =>
+    endpoint(`/me/orders/${encodeURIComponent(orderId)}/return-pickup`, returnPickupSchema),
+  returnPickups: (orderId: string) =>
+    endpoint(`/me/orders/${encodeURIComponent(orderId)}/return-pickups`, returnPickupsResponse),
 
   /** Whole-order only. Dropping one item of several is a return, Phase 8. */
   cancelOrder: (id: string) =>
@@ -159,6 +212,24 @@ export const endpoints = {
     endpoint(`/seller/orders/${encodeURIComponent(id)}/cancel`, orderDetailSchema),
 
   // ---- auth -----------------------------------------------------------------
+  // ---- seller console (Phase 6) ---------------------------------------------
+  warehouses: () => endpoint('/seller/warehouses', warehousesResponse),
+  createWarehouse: () => endpoint('/seller/warehouses', warehouseSchema),
+  warehouse: (id: string) =>
+    endpoint(`/seller/warehouses/${encodeURIComponent(id)}`, warehouseSchema),
+
+  /** What auto-dispatch WOULD do. A GET, because it changes nothing. */
+  dispatchPlan: (orderId: string) =>
+    endpoint(`/seller/orders/${encodeURIComponent(orderId)}/dispatch-plan`, dispatchPlanSchema),
+  autoDispatch: (orderId: string) =>
+    endpoint(`/seller/orders/${encodeURIComponent(orderId)}/dispatch`, autoDispatchSchema),
+
+  codSummary: () => endpoint('/seller/cod', codReconciliationSchema),
+  codOutstanding: () => endpoint('/seller/cod/outstanding', codRowsResponse),
+  codCollected: () => endpoint('/seller/cod/collected', codRowsResponse),
+  collectCod: (orderId: string) =>
+    endpoint(`/seller/orders/${encodeURIComponent(orderId)}/cod-collection`, codCollectionSchema),
+
   register: () => endpoint('/auth/register', authResponseSchema),
   login: () => endpoint('/auth/login', authResponseSchema),
   refresh: () => endpoint('/auth/refresh', authResponseSchema),

@@ -15,6 +15,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { listings } from './listings.js';
 import { organisations } from './organisations.js';
+import { deliverySlots } from './logistics.js';
 import { paymentIntents } from './payments.js';
 import { users } from './users.js';
 
@@ -40,9 +41,11 @@ import { users } from './users.js';
  * status by hand; a caller accepts, ships or cancels, and the status follows.
  *
  * Deliberately not PRD 9.2's list. PACKED moves no money and no stock and a
- * buyer cannot tell it from ACCEPTED; OUT_FOR_DELIVERY is a carrier event and
- * belongs to Phase 6; PARTIALLY_SHIPPED, which the Phase 5 acceptance criterion
- * requires, has nowhere to live in a linear list.
+ * buyer cannot tell it from ACCEPTED; PARTIALLY_SHIPPED, which the Phase 5
+ * acceptance criterion requires, has nowhere to live in a linear list.
+ * OUT_FOR_DELIVERY arrived in PHASE 6 with the carrier feed that emits it -
+ * held back until then so a real event source would not find a hand-set column
+ * already in the way.
  */
 export const orderStatus = pgEnum('order_status', [
   'PENDING_PAYMENT',
@@ -51,6 +54,8 @@ export const orderStatus = pgEnum('order_status', [
   'REJECTED',
   'PARTIALLY_SHIPPED',
   'SHIPPED',
+  /** Phase 6, and SYSTEM-only: a courier reports it, nobody decides it. */
+  'OUT_FOR_DELIVERY',
   'DELIVERED',
   'CANCELLED',
 ]);
@@ -96,12 +101,50 @@ export const orders = pgTable(
      */
     ageVerifiedAt: timestamp('age_verified_at', { withTimezone: true }),
 
+    /**
+     * The delivery window the buyer chose, added in Phase 6.
+     *
+     * NULLABLE, and it stays nullable. Slots are capacity in a zone, and no
+     * international zone has any - a scheduled window across a customs border
+     * is a promise nobody can keep. An order to Dubai has no slot and is not
+     * broken. RESTRICT so a booked slot cannot be deleted underneath an order.
+     */
+    deliverySlotId: uuid('delivery_slot_id').references(() => deliverySlots.id, {
+      onDelete: 'restrict',
+    }),
+
+    /**
+     * Cash on delivery, collected. PRD 10.1: "a `cod_receivable` account tracks
+     * the gap between delivered and collected".
+     *
+     * The TIMESTAMP is the fact; the amount is stored beside it because a
+     * courier can come back short, and "delivered, collected 2000 of 2400" is a
+     * real reconciliation state that a boolean cannot express. The ledger holds
+     * the money - these two columns exist so the seller console can list what
+     * is outstanding without summing entries per order.
+     */
+    codCollectedAt: timestamp('cod_collected_at', { withTimezone: true }),
+    codCollectedAmount: bigint('cod_collected_amount', { mode: 'number' }),
+
     placedAt: timestamp('placed_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     check('orders_total_non_negative', sql`${t.totalAmount} >= 0`),
+    /**
+     * Both COD columns or neither. A collection timestamp with no amount is a
+     * reconciliation row nobody can reconcile, and an amount with no timestamp
+     * is money we cannot say we hold.
+     */
+    check(
+      'orders_cod_collection_complete',
+      sql`num_nonnulls(${t.codCollectedAt}, ${t.codCollectedAmount}) IN (0, 2)`,
+    ),
+    check(
+      'orders_cod_collected_non_negative',
+      sql`${t.codCollectedAmount} IS NULL OR ${t.codCollectedAmount} >= 0`,
+    ),
     unique('orders_order_number_key').on(t.orderNumber),
     index('orders_tenant_idx').on(t.tenantId),
     index('orders_buyer_idx').on(t.buyerUserId),

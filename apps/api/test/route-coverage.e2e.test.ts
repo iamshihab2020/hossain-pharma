@@ -46,6 +46,17 @@ const registered: { method: string; url: string }[] = [];
  *   point to everything else. What an anonymous reader can SEE is limited in
  *   the database, by the `public_active_offers` policy in migration 0008, not
  *   by these handlers.
+ * `/serviceability` - PRD 8.4 puts a delivery estimate and a serviceability
+ *   check on the product page BEFORE add-to-cart, for a visitor who has not
+ *   signed in, has no address book and has chosen no seller. Every table it
+ *   reads (delivery_zones, serviceability, zone_rates) is platform-owned and
+ *   carries no RLS, and none of them describes a person - a postcode-to-zone
+ *   map is public geography, which is why it can answer without a token
+ *   without exposing anything a caller did not already supply.
+ * `/delivery-slots` - the other half of the same answer. A buyer choosing a
+ *   delivery window is choosing courier capacity in a REGION, which belongs to
+ *   no seller and names no person. It exposes REMAINING capacity rather than
+ *   `booked`, so it leaks nothing about how many other people ordered.
  */
 const PUBLIC_READS: ReadonlySet<string> = new Set([
   'GET /health',
@@ -58,6 +69,8 @@ const PUBLIC_READS: ReadonlySet<string> = new Set([
   'GET /products/:slug/similar',
   'GET /search',
   'GET /search/suggest',
+  'GET /serviceability',
+  'GET /delivery-slots',
 ]);
 
 /**
@@ -73,6 +86,17 @@ const PUBLIC_READS: ReadonlySet<string> = new Set([
  * no justification, so adding one is a decision somebody wrote down.
  */
 const PUBLIC_WRITES: ReadonlyMap<string, string> = new Map([
+  [
+    'POST /webhooks/shipping/:provider',
+    'A courier holds no NexMarket session; the HMAC over the raw body is the ' +
+      'authentication, verified in constant time against a secret that is ' +
+      'deliberately NOT the payment one - a leaked courier integration must not ' +
+      'let anyone forge a payment. It moves order status but never money, and ' +
+      'the only caller-influenced value reaching a query is a tracking number, ' +
+      'which selects exactly one parcel. Replays converge rather than ' +
+      'duplicating: an event not ahead of where the parcel already is does ' +
+      'nothing.',
+  ],
   [
     'POST /auth/register',
     'There is no caller identity yet; creating one is the point.',

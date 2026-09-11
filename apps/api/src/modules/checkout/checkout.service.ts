@@ -4,6 +4,7 @@ import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import { type Entry, money } from '@nexmarket/shared';
 import { asTenantScope } from '../../common/tenant-scope.js';
 import { OrderEventsService } from '../fulfilment/order-events.service.js';
+import { SlotsService } from '../shipping/slots.service.js';
 import { AddressesService } from '../addresses/addresses.service.js';
 import { CartService } from '../cart/cart.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
@@ -37,6 +38,14 @@ export type Confirmation = {
 /** PRD 9.1's age gate: a date-of-birth confirmation, nothing heavier. */
 const MINIMUM_AGE_YEARS = 18;
 
+/**
+ * How many times one line may re-pick a warehouse before giving up.
+ *
+ * Generous relative to any real seller's warehouse count, and finite so a
+ * pathologically contended listing cannot hold a transaction open.
+ */
+const MAX_RESERVATION_ATTEMPTS = 50;
+
 @Injectable()
 export class CheckoutService {
   constructor(
@@ -48,6 +57,7 @@ export class CheckoutService {
     private readonly searchIndex: SearchIndexService,
     @Inject(PAYMENT_PROVIDERS) private readonly providers: PaymentProvider[],
     private readonly events: OrderEventsService,
+    private readonly slots: SlotsService,
   ) {}
 
   /** The priced cart, for display. Same code path the confirm uses. */
@@ -94,6 +104,7 @@ export class CheckoutService {
 
       this.assertTotalMatches(quote, input);
       this.assertAgeGate(quote, input);
+      this.assertCodAllowed(quote, input);
 
       const [intent] = await tx
         .insert(schema.paymentIntents)
@@ -122,12 +133,23 @@ export class CheckoutService {
         })
         .where(eq(schema.paymentIntents.id, intent.id));
 
+      /**
+       * The slot is BOOKED BEFORE the orders are written.
+       *
+       * If capacity has gone, this throws and nothing has been placed. The
+       * other order - place, then book - would leave orders pointing at a
+       * window the courier cannot service, and the buyer would have paid for a
+       * promise nobody can keep.
+       */
+      const slotId = await this.bookSlot(tx, quote, input.deliverySlotId);
+
       const orders = await this.placeOrders(tx, {
         quote,
         userId,
         intentId: intent.id,
         address,
         ageVerified: quote.requiresAgeCheck,
+        slotId,
       });
 
       await this.postPlacementEntries(tx, quote, intent.id, provider.method);
@@ -192,6 +214,64 @@ export class CheckoutService {
   }
 
   /**
+   * PRD 9.1: cash on delivery is offered "where the zone allows it".
+   *
+   * ENFORCED HERE, not only hidden in the UI. The storefront withdraws the
+   * option when `zone.codAllowed` is false, but a payment method arrives in a
+   * request body and the rule that decides whether money can be collected at
+   * the door cannot live in a radio button. Same reasoning as the price check
+   * above: nothing a client sends becomes a fact about the order.
+   *
+   * An UNSERVICEABLE address (`zone === null`) does not fail here. It cannot
+   * reach this point - the address was chosen from the buyer's own book and
+   * checkout quoted it - and refusing COD for an address the rate card merely
+   * has no row for would withdraw the country's most common payment method on
+   * the strength of a seed gap. The zone has to exist and say no.
+   */
+  /**
+   * Validates and takes one unit of the chosen window's capacity.
+   *
+   * THE SLOT MUST BELONG TO THE ZONE THE ADDRESS RESOLVED TO. Without that
+   * check a buyer could post any slot id and book a courier's Dhaka morning for
+   * a parcel going to Sylhet - the id is caller-supplied, and the only thing
+   * that makes it meaningful is the zone it belongs to. Same reasoning as the
+   * price check: nothing a client sends becomes a fact about the order.
+   */
+  private async bookSlot(
+    tx: Transaction,
+    quote: Quote,
+    slotId: string | undefined,
+  ): Promise<string | null> {
+    if (slotId === undefined) return null;
+
+    if (quote.zone === null) {
+      throw new ConflictException({
+        code: 'SLOT_NOT_AVAILABLE',
+        message: 'We do not schedule deliveries to that address.',
+      });
+    }
+    if (!(await this.slots.belongsToZone(tx, slotId, quote.zone.id))) {
+      throw new ConflictException({
+        code: 'SLOT_WRONG_ZONE',
+        message: 'That delivery window is not offered where this order is going.',
+      });
+    }
+
+    await this.slots.book(tx, slotId);
+    return slotId;
+  }
+
+  private assertCodAllowed(quote: Quote, input: ConfirmInput): void {
+    if (input.paymentMethod !== 'cod') return;
+    if (quote.zone === null || quote.zone.codAllowed) return;
+
+    throw new ConflictException({
+      message: `No courier collects cash in ${quote.zone.areaName}. Pay by card to have it delivered there.`,
+      code: 'COD_NOT_AVAILABLE',
+    });
+  }
+
+  /**
    * PRD 13's "optimistic locking on inventory", in its cheapest correct form.
    *
    * The check and the write are ONE statement, so no lost update is possible
@@ -217,23 +297,99 @@ export class CheckoutService {
     listingId: string,
     quantity: number,
     productName: string,
-  ): Promise<void> {
-    const updated = await tx.execute(sql`
-      UPDATE inventory_items
-         SET reserved = reserved + ${quantity}, updated_at = now()
-       WHERE id = (
-         SELECT id FROM inventory_items
-          WHERE listing_id = ${listingId} AND (on_hand - reserved) >= ${quantity}
-          ORDER BY (on_hand - reserved) DESC
-          LIMIT 1
-          FOR UPDATE
-       )
-         AND (on_hand - reserved) >= ${quantity}
-      RETURNING id
-    `);
-    if ((updated.rowCount ?? 0) === 0) {
-      throw new ConflictException(`${productName} sold out while you were checking out`);
+  ): Promise<{ warehouseId: string; quantity: number }[]> {
+    let remaining = quantity;
+    const taken_from: { warehouseId: string; quantity: number }[] = [];
+
+    /**
+     * ACROSS WAREHOUSES, in priority order, taking what each one can give.
+     *
+     * Phase 4 required a SINGLE inventory row to hold the whole quantity, and
+     * Phase 6 found what that costs. A seller with three units in Dhaka and
+     * three in Chattogram could not sell four - while `listings.available_stock`,
+     * which SUMS across warehouses, went on advertising six. The buyer was told
+     * "sold out while you were checking out" about stock that existed and was
+     * on the page a second earlier.
+     *
+     * It also made multi-warehouse dispatch unreachable: reserving everything
+     * against one row meant every order had exactly one origin, so the
+     * allocator could never split one.
+     *
+     * THE TAKE IS COMPUTED IN A CTE, not in RETURNING. Postgres evaluates
+     * RETURNING against the NEW row, so `LEAST(remaining, on_hand - reserved)`
+     * there reads the already-incremented `reserved` and yields zero - the
+     * first version of this did exactly that and reported every checkout sold
+     * out.
+     *
+     * Both halves of the Phase 4 locking discipline survive: `FOR UPDATE` lives
+     * in the CTE so the subquery takes the lock, and the availability predicate
+     * is repeated in the outer WHERE so it is re-checked after the lock.
+     */
+    for (let attempt = 0; remaining > 0; attempt += 1) {
+      /**
+       * A bound, because the loop can now legitimately make no progress: the
+       * row this iteration picked may have been drained by a concurrent
+       * checkout between the CTE's snapshot and the lock, in which case the
+       * outer predicate fails and zero rows update. Retrying is right - another
+       * warehouse may still have stock - but retrying forever on a genuinely
+       * sold-out listing would be a hot loop holding an open transaction.
+       */
+      if (attempt >= MAX_RESERVATION_ATTEMPTS) {
+        throw new ConflictException(`${productName} sold out while you were checking out`);
+      }
+
+      const updated = await tx.execute<{ taken: number; warehouse_id: string }>(sql`
+        WITH target AS (
+          SELECT c.id, c.warehouse_id, LEAST(${remaining}, c.on_hand - c.reserved) AS take
+            FROM inventory_items c
+            JOIN warehouses w ON w.id = c.warehouse_id
+           WHERE c.listing_id = ${listingId} AND (c.on_hand - c.reserved) > 0
+           ORDER BY w.priority ASC, c.id ASC
+           LIMIT 1
+           FOR UPDATE OF c
+        )
+        UPDATE inventory_items i
+           SET reserved = i.reserved + target.take, updated_at = now()
+          FROM target
+         WHERE i.id = target.id
+           AND (i.on_hand - i.reserved) >= target.take
+        RETURNING target.take AS taken, target.warehouse_id AS warehouse_id
+      `);
+
+      const row = updated.rows[0];
+      if (row === undefined) {
+        /**
+         * Either nothing is available anywhere, or the chosen row was drained
+         * under us. `hasAvailability` tells the two apart, so a sold-out
+         * listing fails immediately and a contended one retries.
+         */
+        if (!(await this.hasAvailability(tx, listingId))) {
+          throw new ConflictException(`${productName} sold out while you were checking out`);
+        }
+        continue;
+      }
+
+      const taken = Number(row.taken);
+      if (!Number.isFinite(taken) || taken <= 0) {
+        throw new ConflictException(`${productName} sold out while you were checking out`);
+      }
+
+      remaining -= taken;
+      taken_from.push({ warehouseId: row.warehouse_id, quantity: taken });
     }
+
+    return taken_from;
+  }
+
+  /** Is there a single unit of this listing free anywhere? */
+  private async hasAvailability(tx: Transaction, listingId: string): Promise<boolean> {
+    const rows = await tx.execute<{ any_left: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM inventory_items
+         WHERE listing_id = ${listingId} AND (on_hand - reserved) > 0
+      ) AS any_left
+    `);
+    return rows.rows[0]?.any_left === true;
   }
 
   private async placeOrders(
@@ -244,6 +400,8 @@ export class CheckoutService {
       intentId: string;
       address: Awaited<ReturnType<AddressesService['forCheckout']>>;
       ageVerified: boolean;
+      /** One window for the whole cart - a slot is a zone's capacity, not a seller's. */
+      slotId: string | null;
     },
   ): Promise<PlacedOrder[]> {
     const placed: PlacedOrder[] = [];
@@ -285,7 +443,28 @@ export class CheckoutService {
         // both tables are this seller's, and doing them outside it would fail
         // the tenant policy rather than silently succeed.
         for (const line of group.lines) {
-          await this.reserve(tx, line.listingId, line.quantity, line.productName);
+          const taken = await this.reserve(tx, line.listingId, line.quantity, line.productName);
+          /**
+           * WHERE the units are held is recorded, not just that they are.
+           *
+           * `inventory_items.reserved` is a total with no link to an order, so
+           * without this a later dispatch of order B could consume the units
+           * order A reserved - they look identical on the row. Writing the
+           * split here, inside the seller's scope where the reservation
+           * happened, is what makes `FulfilmentService.plan` exact rather than
+           * a guess.
+           */
+          const orderItemId = inserted.itemIdsByListing.get(line.listingId);
+          if (orderItemId !== undefined && taken.length > 0) {
+            await tx.insert(schema.orderItemAllocations).values(
+              taken.map((pick) => ({
+                tenantId: group.sellerId,
+                orderItemId,
+                warehouseId: pick.warehouseId,
+                quantity: pick.quantity,
+              })),
+            );
+          }
         }
         // F-2 from the plan's audit: a write that changes what a buyer would
         // FIND must reindex, and taking the last unit does exactly that -
@@ -322,8 +501,17 @@ export class CheckoutService {
       intentId: string;
       address: Awaited<ReturnType<AddressesService['forCheckout']>>;
       ageVerified: boolean;
+      slotId: string | null;
     },
-  ): Promise<{ id: string; orderNumber: string }> {
+  ): Promise<{
+    id: string;
+    orderNumber: string;
+    /**
+     * The order-item id for each listing, so the caller can attach the
+     * reservation's warehouse split to the right line without re-reading them.
+     */
+    itemIdsByListing: Map<string, string>;
+  }> {
     {
       const [order] = await tx
         .insert(schema.orders)
@@ -343,12 +531,14 @@ export class CheckoutService {
           // restate where last year's parcel went.
           shippingAddress: input.address,
           ageVerifiedAt: input.ageVerified ? new Date() : null,
+          deliverySlotId: input.slotId,
         })
         .returning({ id: schema.orders.id, orderNumber: schema.orders.orderNumber });
       if (order === undefined) throw new Error('Order insert returned no row');
 
+      const itemIdsByListing = new Map<string, string>();
       for (const line of group.lines) {
-        await tx.insert(schema.orderItems).values({
+        const [item] = await tx.insert(schema.orderItems).values({
           tenantId: group.sellerId,
           orderId: order.id,
           listingId: line.listingId,
@@ -363,10 +553,12 @@ export class CheckoutService {
           commissionBps: line.commissionBps,
           commissionAmount: line.commission.amount,
           currency: input.quote.currency,
-        });
+        }).returning({ id: schema.orderItems.id });
+        if (item === undefined) throw new Error('Order item insert returned no row');
+        itemIdsByListing.set(line.listingId, item.id);
       }
 
-      return order;
+      return { ...order, itemIdsByListing };
     }
   }
 

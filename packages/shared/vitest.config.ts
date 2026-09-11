@@ -12,6 +12,8 @@ export default defineConfig({
         'src/pricing.ts',
         'src/order-state.ts',
         'src/fulfilment.ts',
+        'src/logistics.ts',
+        'src/allocation.ts',
       ],
       // PRD section 13: 100 percent on pricing, on the 5.3 capability matrix -
       // an authorisation table where a missed branch is a missed permission - and

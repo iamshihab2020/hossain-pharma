@@ -76,6 +76,40 @@ refuses a static CommonJS-to-ESM import. Decorators are unaffected.
 
 ## Tests
 
+**The repo co-locates tests. This package is the one exception, and the line is
+THE NEST APPLICATION.**
+
+| Where | Name | For |
+|---|---|---|
+| `src/**/*.test.ts` | `thing.test.ts` | Tests of one module, run against that module directly. |
+| `test/*.e2e.test.ts` | `area.e2e.test.ts` | Tests that boot the app and drive it over HTTP. |
+
+Not "unit versus integration", and not "database versus no database" —
+`packages/db` co-locates `catalogue-rls.test.ts` in `src/` and that test starts
+a Postgres. What separates the two piles here is whether
+`Test.createTestingModule` appears in the file. Nothing outside `apps/api` has
+an application to boot, so nothing outside `apps/api` has a second directory.
+
+`pagination`, `password`, `tokens`, `google-state` and `zone-rate.adapter` sit
+in `src/` because each is a pure function with an obvious home. `test/` holds
+the ones with no single home: `route-coverage` asserts over *every* route,
+`tenancy` over every policy, `contract` over the whole published API. (`ledger.e2e`
+is the odd one — it drives the database through `withTenant` without booting the
+app, and is in `test/` because it is about the ledger as a whole rather than one
+file.)
+
+**Why not one central `tests/` tree for the repo:** `packages/shared` enforces
+100% coverage on nine named files, and a test beside its source makes "is this
+covered" a one-directory question; turbo caches per package, so
+`pnpm --filter @nexmarket/db test` needs the tests inside that package; and
+`git mv` takes a co-located test with its source, which is how a central tree
+avoids accumulating orphans for modules that no longer exist.
+
+Keeping a test pure is therefore a design decision with a visible consequence:
+the shipping quote port stayed synchronous and database-free specifically so
+`zone-rate.adapter.test.ts` could live in `src/` and run in milliseconds. See
+the note at the top of `shipping-quote.port.ts`.
+
 `pnpm test` starts one Postgres via Testcontainers, migrates it and seeds it
 before any test file is imported (`test/global-setup.ts`), then runs the files in
 parallel against it.

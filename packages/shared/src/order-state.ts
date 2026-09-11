@@ -7,9 +7,11 @@
  *   - PACKED moves no money and no stock, and a buyer cannot tell it from
  *     ACCEPTED. It is a warehouse-workflow state, and there is no warehouse
  *     workflow until Phase 6 gives warehouses an allocation strategy.
- *   - OUT_FOR_DELIVERY is a carrier tracking event. Inventing it now as a
- *     seller-clicked button means Phase 6 arrives to find a hand-set column
- *     competing with a real event feed.
+ *   - OUT_FOR_DELIVERY arrived in PHASE 6, with the carrier feed that emits it.
+ *     Phase 5 deliberately left it out rather than shipping it as a
+ *     seller-clicked button, precisely so that the real event feed would not
+ *     arrive to find a hand-set column competing with it. Only SYSTEM may set
+ *     it: it is something a courier reports, not something a person decides.
  *   - PARTIALLY_SHIPPED, which Phase 5's acceptance criterion requires, has
  *     nowhere to live in a linear list.
  *   - REJECTED is distinct from CANCELLED because a buyer must be able to tell
@@ -23,6 +25,7 @@ export type OrderStatus =
   | 'REJECTED'
   | 'PARTIALLY_SHIPPED'
   | 'SHIPPED'
+  | 'OUT_FOR_DELIVERY'
   | 'DELIVERED'
   | 'CANCELLED';
 
@@ -56,6 +59,27 @@ const TRANSITIONS: Readonly<
     // ADR 0018: the webhook is the only writer of payment status. This is that
     // rule's consequence for orders - no human moves an order to PAID.
     PAID: ['SYSTEM'],
+    /**
+     * CASH ON DELIVERY, and the reason this edge exists at all.
+     *
+     * Phase 5 had no such edge, which made a COD order unfulfillable: it sits
+     * at PENDING_PAYMENT until the cash is collected, collection happens at the
+     * door, and the parcel only reaches the door if somebody ships it. The
+     * order could never be accepted, so it could never be shipped, so the cash
+     * could never be collected. Phase 6 found it with the first end-to-end
+     * journey that tried to pay in cash.
+     *
+     * Shipping before the money arrives IS what cash on delivery means, so the
+     * order status - which describes FULFILMENT - has no business refusing it.
+     * Payment status lives on the intent and stays COD_PENDING throughout,
+     * which is the honest record: no money has moved.
+     *
+     * The method check is NOT here, because this table knows nothing about
+     * payment methods and should not learn. `FulfilmentService.accept` refuses
+     * a prepaid order that has not been paid; see the note there.
+     */
+    ACCEPTED: ['SELLER'],
+    REJECTED: ['SELLER'],
     CANCELLED: ['BUYER', 'SELLER'],
   },
   PAID: {
@@ -75,7 +99,24 @@ const TRANSITIONS: Readonly<
     // unit that was ever going to move, moved.
   },
   SHIPPED: {
-    DELIVERED: ['SELLER'],
+    /**
+     * SYSTEM only. A rider scanning a parcel onto a van is a fact the carrier
+     * reports; a seller who could set it by hand would be asserting something
+     * they cannot observe, and the whole point of Phase 6's tracking adapter is
+     * that this state has a source.
+     */
+    OUT_FOR_DELIVERY: ['SYSTEM'],
+    /**
+     * SELLER survives alongside the carrier feed on purpose. Not every parcel
+     * has a tracked carrier - `shipments.carrier_name` is nullable because a
+     * seller may hand a box to a rider - and an order that can only be
+     * delivered by a webhook is an order that never completes when there is no
+     * webhook.
+     */
+    DELIVERED: ['SELLER', 'SYSTEM'],
+  },
+  OUT_FOR_DELIVERY: {
+    DELIVERED: ['SELLER', 'SYSTEM'],
   },
   REJECTED: {},
   DELIVERED: {},
@@ -121,9 +162,15 @@ export function statusFromCoverage(
     ordered += line.ordered;
   }
 
-  // DELIVERED is past the end of this function's authority. Coverage cannot
-  // un-deliver an order, and Phase 6's carrier events are what will move it.
-  if (current === 'DELIVERED') return 'DELIVERED';
+  /**
+   * Past the end of this function's authority.
+   *
+   * Coverage cannot un-deliver an order, and it cannot recall a parcel from a
+   * van either. Both of these are set by the carrier feed, and recomputing them
+   * from line coverage would let a late cancellation of an already-empty
+   * remainder drag a delivered order back to SHIPPED.
+   */
+  if (current === 'DELIVERED' || current === 'OUT_FOR_DELIVERY') return current;
   if (shipped === 0 && cancelled === 0) return current;
   if (shipped === 0 && cancelled === ordered) return 'CANCELLED';
   if (shipped + cancelled === ordered) return 'SHIPPED';

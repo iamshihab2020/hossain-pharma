@@ -125,6 +125,15 @@ export const productVariantSchema = z.object({
   id: z.string(),
   sku: z.string(),
   name: z.string(),
+  /**
+   * CHARGEABLE grams - `max(actual, volumetric)` - or null when unmeasured.
+   *
+   * The server does the courier arithmetic and sends one number; the page's
+   * delivery check passes it straight back as `weightGrams`. Shipping the raw
+   * weight and three dimensions would give the client three chances to combine
+   * them differently from the server.
+   */
+  chargeableGrams: z.number().int().nullable(),
   buyBox: publicBuyBoxSchema,
 });
 export type ProductVariant = z.infer<typeof productVariantSchema>;
@@ -308,6 +317,25 @@ export const quoteGroupSchema = z.object({
 });
 export type QuoteGroup = z.infer<typeof quoteGroupSchema>;
 
+/**
+ * The delivery zone the address resolved to, or null when nothing serves it.
+ *
+ * On the QUOTE rather than per group: it is a fact about where the buyer is,
+ * not about who is selling. `codAllowed` is what withdraws cash on delivery -
+ * PRD 9.1's "COD where the zone allows it" - and the API enforces the same rule
+ * on confirm, so hiding the radio is a courtesy rather than the control.
+ */
+export const quoteZoneSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  name: z.string(),
+  areaName: z.string(),
+  codAllowed: z.boolean(),
+  transitDaysMin: z.number().int(),
+  transitDaysMax: z.number().int(),
+});
+export type QuoteZone = z.infer<typeof quoteZoneSchema>;
+
 export const quoteSchema = z.object({
   cartId: z.string(),
   currency: z.string().length(3),
@@ -318,8 +346,140 @@ export const quoteSchema = z.object({
   total: moneySchema,
   /** True if any line sits in a RESTRICTED category. */
   requiresAgeCheck: z.boolean(),
+  zone: quoteZoneSchema.nullable(),
 });
 export type Quote = z.infer<typeof quoteSchema>;
+
+/**
+ * `GET /serviceability`.
+ *
+ * NOT-SERVICEABLE IS A 200 with `serviceable: false`, so the optional fields
+ * below are absent rather than null in that case. A 404 would say the endpoint
+ * found nothing, when what was found is that no courier goes there.
+ */
+export const serviceabilitySchema = z.object({
+  serviceable: z.boolean(),
+  postcode: z.string(),
+  countryCode: z.string(),
+  areaName: z.string().optional(),
+  zoneName: z.string().optional(),
+  codAllowed: z.boolean().optional(),
+  /** Dispatch plus transit, as a RANGE. An estimate shown as one number reads
+   *  as a promise. */
+  earliestDays: z.number().int().optional(),
+  latestDays: z.number().int().optional(),
+  shipping: moneySchema.nullable().optional(),
+  /** A weight was given and no band covers it: freight, not standard delivery. */
+  overWeightLimit: z.boolean().optional(),
+});
+export type Serviceability = z.infer<typeof serviceabilitySchema>;
+
+/**
+ * One delivery window. Minutes from midnight in the ZONE's own reckoning - a
+ * timestamptz would invite a conversion that turns "Saturday morning" into
+ * Friday night for a reader elsewhere.
+ */
+export const deliverySlotSchema = z.object({
+  id: z.string(),
+  date: z.string(),
+  startMinute: z.number().int(),
+  endMinute: z.number().int(),
+  /** What is LEFT, never how many others booked. Full windows are omitted. */
+  remaining: z.number().int(),
+});
+export type DeliverySlot = z.infer<typeof deliverySlotSchema>;
+
+export const deliverySlotsResponse = z.object({
+  serviceable: z.boolean(),
+  /** Empty is legitimate: no international zone has scheduled windows. */
+  slots: z.array(deliverySlotSchema),
+});
+
+export const warehouseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  addressLine: z.string(),
+  city: z.string(),
+  district: z.string(),
+  postcode: z.string(),
+  countryCode: z.string(),
+  contactPhone: z.string(),
+  isDefault: z.boolean(),
+  isPickupPoint: z.boolean(),
+  priority: z.number().int(),
+  listingCount: z.number().int(),
+  unitsOnHand: z.number().int(),
+});
+export type Warehouse = z.infer<typeof warehouseSchema>;
+export const warehousesResponse = z.object({ items: z.array(warehouseSchema) });
+
+const codRowSchema = z.object({
+  orderId: z.string(),
+  orderNumber: z.string(),
+  status: z.string(),
+  expected: moneySchema,
+  collected: moneySchema.nullable(),
+  deliveredAt: z.string().nullable(),
+});
+export type CodRow = z.infer<typeof codRowSchema>;
+
+export const codReconciliationSchema = z.object({
+  currency: z.string(),
+  expected: moneySchema,
+  collected: moneySchema,
+  outstanding: moneySchema,
+  rows: z.array(codRowSchema),
+});
+export type CodReconciliation = z.infer<typeof codReconciliationSchema>;
+
+export const codRowsResponse = z.object({ items: z.array(codRowSchema) });
+
+export const codCollectionSchema = z.object({
+  orderId: z.string(),
+  orderNumber: z.string(),
+  expected: moneySchema,
+  collected: moneySchema,
+  outstanding: moneySchema,
+  collectedAt: z.string(),
+});
+export type CodCollection = z.infer<typeof codCollectionSchema>;
+
+export const returnPickupSchema = z.object({
+  id: z.string(),
+  orderId: z.string(),
+  orderNumber: z.string(),
+  status: z.enum(['SCHEDULED', 'COLLECTED', 'CANCELLED']),
+  slot: z.object({
+    id: z.string(),
+    date: z.string(),
+    startMinute: z.number().int(),
+    endMinute: z.number().int(),
+  }),
+  createdAt: z.string(),
+});
+export type ReturnPickup = z.infer<typeof returnPickupSchema>;
+export const returnPickupsResponse = z.object({ items: z.array(returnPickupSchema) });
+
+const dispatchPickSchema = z.object({
+  orderItemId: z.string(),
+  quantity: z.number().int(),
+});
+
+export const dispatchPlanSchema = z.object({
+  /** True when the order needs more than one parcel. */
+  splits: z.boolean(),
+  allocations: z.array(
+    z.object({
+      warehouseId: z.string(),
+      warehouseName: z.string(),
+      picks: z.array(dispatchPickSchema),
+    }),
+  ),
+  /** Units no warehouse can fill. A short plan is still worth dispatching. */
+  unfulfilled: z.array(dispatchPickSchema),
+});
+export type DispatchPlan = z.infer<typeof dispatchPlanSchema>;
+
 
 export const PAYMENT_METHODS = ['mock', 'cod'] as const;
 export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
@@ -365,6 +525,8 @@ export const orderStatusSchema = z.enum([
   'REJECTED',
   'PARTIALLY_SHIPPED',
   'SHIPPED',
+  /** Phase 6. A courier reports it; nobody sets it by hand. */
+  'OUT_FOR_DELIVERY',
   'DELIVERED',
   'CANCELLED',
 ]);
@@ -406,7 +568,16 @@ export const ordersResponse = pageOf(orderViewSchema);
 
 // ---- fulfilment -------------------------------------------------------------
 
-export const shipmentStatusSchema = z.enum(['DISPATCHED', 'DELIVERED']);
+/**
+ * Phase 6 added the two middle states with the carrier feed that reports them.
+ * A seller can observe dispatch and arrival; only a courier knows the rest.
+ */
+export const shipmentStatusSchema = z.enum([
+  'DISPATCHED',
+  'IN_TRANSIT',
+  'OUT_FOR_DELIVERY',
+  'DELIVERED',
+]);
 export type ShipmentStatus = z.infer<typeof shipmentStatusSchema>;
 
 export const shipmentItemSchema = z.object({
@@ -417,7 +588,8 @@ export type ShipmentItem = z.infer<typeof shipmentItemSchema>;
 
 /**
  * A parcel. Carrier and tracking number are nullable because a seller may hand
- * a box to a rider with neither, and a real ShippingProvider is Phase 6.
+ * a box to a rider with neither - Phase 6's `ShippingProvider` fills them in
+ * when the seller books one, and leaves them null when they do not.
  */
 export const shipmentViewSchema = z.object({
   id: z.string(),
@@ -431,13 +603,32 @@ export const shipmentViewSchema = z.object({
 });
 export type ShipmentView = z.infer<typeof shipmentViewSchema>;
 
+/**
+ * What one auto-dispatch produced. Declared HERE, after `shipmentViewSchema`,
+ * because it embeds it - zod schemas are values, so a forward reference is a
+ * temporal-dead-zone error rather than a type error, and it fails at import
+ * time with a message that does not mention this file.
+ */
+export const autoDispatchSchema = z.object({
+  shipments: z.array(shipmentViewSchema),
+  splits: z.boolean(),
+  warehouses: z.array(z.object({ id: z.string(), name: z.string() })),
+  unfulfilled: z.array(z.object({ orderItemId: z.string(), quantity: z.number().int() })),
+});
+export type AutoDispatch = z.infer<typeof autoDispatchSchema>;
+
 export const orderEventTypeSchema = z.enum([
   'PLACED',
   'PAID',
   'ACCEPTED',
   'REJECTED',
   'SHIPMENT_DISPATCHED',
+  // Phase 6 carrier events. Always actor SYSTEM - reported, not decided.
+  'SHIPMENT_IN_TRANSIT',
+  'SHIPMENT_OUT_FOR_DELIVERY',
   'SHIPMENT_DELIVERED',
+  'COD_COLLECTED',
+  'RETURN_PICKUP_SCHEDULED',
   'LINES_CANCELLED',
   'CANCELLED',
 ]);
@@ -470,7 +661,27 @@ export const orderDetailSchema = orderViewSchema.extend({
    * purpose: it is a jsonb column, and a packing slip is not the place to throw
    * because a field the schema did not expect turned up years later.
    */
-  shippingAddress: z.record(z.string(), z.unknown()),
+  /**
+   * The address as it was ON THE DAY, snapshotted onto the order.
+   *
+   * Typed rather than left as an open record, because readers need fields from
+   * it - the return-pickup panel resolves collection windows from `postcode`
+   * and `countryCode`, and a packing slip prints the rest. `passthrough` keeps
+   * any extra fields the API snapshots without this file having to track them,
+   * so adding one server-side is not a breaking change here.
+   */
+  shippingAddress: z
+    .object({
+      recipientName: z.string().optional(),
+      phone: z.string().optional(),
+      line1: z.string().optional(),
+      line2: z.string().nullable().optional(),
+      city: z.string().optional(),
+      district: z.string().optional(),
+      postcode: z.string().default(''),
+      countryCode: z.string().default('BD'),
+    })
+    .loose(),
   shipments: z.array(shipmentViewSchema),
   timeline: z.array(orderEventSchema),
 });

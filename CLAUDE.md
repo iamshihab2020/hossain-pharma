@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository directory is still `hossain-pharma` and the git history begins as a pharmacy project. That is historical. **Pharmacy is not a vertical here** and prescription medicine is explicitly out of scope — do not reintroduce health framing into naming, seed data, or copy. Names inside `archive/` are left alone on purpose.
 
-Work is organised into 13 phases. **Phases 0-5 are complete; Phases 6-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
+Work is organised into 13 phases. **Phases 0-6 are complete; Phases 7-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
 
 ## Commands
 
@@ -73,7 +73,8 @@ whole catalogue — `categories`, `products`, `product_variants`, `product_media
 `product_attributes` — because a catalogue entry shared by competing sellers is the point
 of PRD 8.3. The tenant-owned tables are `org_members`, `seller_documents`, `listings`,
 `inventory_items`, `warehouses`, `orders`, `order_items`, `shipments`,
-`shipment_items`, `order_events` and the `rls_probe` canary. The Phase 4 commerce tables split three ways and each way is a decision:
+`shipment_items`, `order_events`, `order_item_allocations`, `return_pickups`
+and the `rls_probe` canary. The Phase 4 commerce tables split three ways and each way is a decision:
 `carts`, `cart_items` and `addresses` are platform-owned and user-scoped in the
 service (a cart spans sellers by definition); `ledger_accounts`,
 `ledger_entries`, `transactions`, `payment_intents` and `payment_events` are
@@ -83,6 +84,14 @@ express that (ADR 0016). `search_documents`,
 `recently_viewed` and `saved_searches` are platform-owned too - the first describes
 already-public products, the other two are scoped by `user_id` in the service, which is
 then the ONLY boundary and is tested as one.
+
+Phase 6's four geography tables - `delivery_zones`, `serviceability`, `zone_rates` and
+`delivery_slots` - are **platform-owned with no RLS**, the same call the catalogue got and
+forced by the same constraint: PRD 8.4 puts a serviceability check on the PRODUCT PAGE,
+which runs with no tenant, for a visitor who has chosen no seller. A tenant-owned zone
+table returns zero rows to exactly that reader. Rates specifically have a second reason -
+the buy box ranks competing offers on LANDED price in one pass over public rows, and
+per-seller rate cards make that unresolvable for a signed-out buyer. ADR 0021.
 
 Three separate mistakes each reduce RLS to decoration, and **all three fail silently**:
 
@@ -144,15 +153,18 @@ new controller with no decorators is closed and tenant-scoped. Opting out is `@P
   and a caller typo becomes a 500.
 - Capabilities are declared with `@RequireCapability('member:write')`. **Never read a
   role name.** ADR 0013.
-- **Four places move `app.tenant_id` outside `withTenant`**, all in
+- **Five places move `app.tenant_id` outside `withTenant`**, all in
   `common/tenant-scope.ts`: founding an organisation, reindexing search (a cross-tenant
   aggregate), placing an order at checkout (a buyer writing to four tenant-owned
-  tables across several sellers), and CANCELLING one (the same buyer, one seller -
-  ADR 0019). All are transaction-local and restore in a `finally`.
-  Before adding a fifth, ask whether the work is genuinely not tenant-scoped or is
+  tables across several sellers), CANCELLING one (the same buyer, one seller -
+  ADR 0019), and BOOKING A RETURN PICKUP (Phase 6, same shape as cancellation).
+  All are transaction-local and restore in a `finally`.
+  Before adding a sixth, ask whether the work is genuinely not tenant-scoped or is
   tenant-scoped work being done from the wrong place - it has been the second more often,
   and Phase 4 rejected one on exactly those grounds: the ledger looked like it needed
-  one and turned out to be platform-owned instead (ADR 0016).
+  one and turned out to be platform-owned instead (ADR 0016). Two of the five are now
+  "a buyer acting on their own order"; a third of that shape should become a named
+  helper rather than a sixth bare call.
 - **A write that changes what a buyer would FIND must reindex.** `SearchIndexService` is
   the only writer of `search_documents`; the hooks live in the listings, catalogue-admin,
   org-governance, checkout and fulfilment services. Cancelling lines puts stock back and
@@ -179,6 +191,17 @@ A hand-dropped `.sql` file sits in the repo looking applied while never running.
 create hand-written migrations with `drizzle-kit generate --custom`, which writes the
 file, journal entry and snapshot together.
 
+**But `--custom` writes the PREVIOUS snapshot, not the current schema**, and that
+freezes the diff base until someone notices. 0013 and 0014 were both `--custom`, so
+the chain sat at Phase 4 for the whole of Phase 5; the first ordinary
+`drizzle-kit generate` afterwards (0015) re-emitted `CREATE TABLE shipments`,
+`shipment_items`, `order_events`, the `order_status` enum values and
+`order_items.cancelled_quantity` — a migration that fails on the first statement
+against any database that already has them. **After a run of `--custom` migrations,
+the next generated one carries a correct snapshot and an over-broad `.sql`: keep the
+snapshot, trim the SQL to the real delta.** That repairs the chain. `drizzle-kit check`
+passes either way and will not catch this.
+
 Changing an already-applied migration's contents changes its hash and requires
 recreating the database.
 
@@ -201,12 +224,43 @@ recreating the database.
   after the lock, so the first version of the stock reservation let two checkouts take the
   last unit. `FOR UPDATE` inside plus the predicate outside; both halves are load-bearing.
 
+### Logistics (Phase 6)
+
+- **`inventory_items.reserved` is a TOTAL, not a claim.** It says how many units are
+  spoken for, never by whom. `order_item_allocations` is what records which warehouse is
+  holding which order line's units, and it exists because without it dispatching order B
+  happily consumed the units order A had reserved - identical rows, no way to tell them
+  apart, and the robbed order simply failed to ship later.
+- **Reservation spreads ACROSS warehouses.** Phase 4 required one inventory row to hold
+  the whole quantity, so a seller with three units in Dhaka and three in Chattogram could
+  not sell four - while `listings.available_stock`, which SUMS across warehouses, went on
+  advertising six. Phase 6 found it. The loop is the Phase 4 conditional UPDATE per row,
+  and the amount taken is computed in a CTE rather than in `RETURNING`, because RETURNING
+  evaluates against the NEW row and `LEAST(need, on_hand - reserved)` there reads the
+  already-incremented counter and yields zero.
+- **The shipping QUOTE port is synchronous and database-free, and that is load-bearing.**
+  The caller resolves the postcode to a zone once and hands the rate card in, so the
+  adapter stays a pure function and the checkout path keeps one lookup rather than one per
+  seller group. `ShippingProvider` (booking and tracking) is a SEPARATE port for the
+  opposite reason: it talks to somebody else's network, after the money has moved.
+- **Carrier events are idempotent by COMPARISON, not by a unique index.** Shipment states
+  are totally ordered, and an event not ahead of where the parcel already is does nothing.
+  Money cannot work this way - two captures of the same amount are not one capture - which
+  is why the payment webhook uses a constraint instead.
+- **A COD order may be ACCEPTED while still PENDING_PAYMENT.** Shipping before the money
+  arrives is what cash on delivery means. `order-state.ts` allows the edge and knows
+  nothing about payment methods; `FulfilmentService.accept` is what refuses a card order
+  that was never paid for.
+
 ### Money
 
 `type Money = { amount: number; currency: string }` where `amount` is **integer minor
 units**. No floats in any pricing, tax, discount, shipping or ledger path. Use the
 helpers in `@nexmarket/shared`. `allocate()` splits one amount across parts without
-losing a unit. Phase 4 predicted it would earn its place at a promotion (Phase 9) or a
+losing a unit - and note that Phase 6's warehouse allocator is `allocateStock()`, named
+apart deliberately: both are re-exported from the package index, so a shared name does not
+conflict, it SHADOWS, and the first caller wanting money-splitting silently gets warehouse
+arithmetic. Phase 4 predicted it would earn its place at a promotion (Phase 9) or a
 partial refund (Phase 8); **a partial shipment got there first** (ADR 0020). A parcel
 carries units, not a fraction, and recomputing its share as a fresh percentage overpays
 at every rounding boundary without failing anything.
@@ -265,12 +319,21 @@ projects on this machine bind 5432/6379. Container-internal ports are standard.
   parsing; behaviour lives in the API's e2e suite. Settled in Phase 5; the reasoning is
   in `apps/web/lib/order-timeline.test.ts`.
 - Test coverage thresholds are enforced at 100% on `money.ts`, `capabilities.ts`,
-  `buy-box.ts`, `order-state.ts`, `fulfilment.ts`, `tenant-context.ts` and
-  `assert-driver.ts`. If one fails, add the missing test rather
-  than lowering the threshold.
+  `buy-box.ts`, `ledger.ts`, `pricing.ts`, `order-state.ts`, `fulfilment.ts`,
+  `logistics.ts`, `allocation.ts`, `tenant-context.ts` and `assert-driver.ts`. If one
+  fails, add the missing test rather than lowering the threshold. Twice now the honest
+  fix has been to DELETE an unreachable branch rather than test it - a `?? 0` on a map
+  key that cannot be missing is a safety net over solid ground.
 - **Never mutate seeded users or organisations in a test.** Granting
   `tanvir@acme.test` a role in one file changed what he could do in another, which passed
   alone and failed in the suite. Register your own fixtures.
+- **Tests are CO-LOCATED with their source**, everywhere except `apps/api/test/`,
+  which holds the ones that boot the Nest app (`Test.createTestingModule`) and are
+  named `*.e2e.test.ts`. The line is the application, not the database:
+  `packages/db/src/catalogue-rls.test.ts` starts a Postgres and is still beside its
+  schema. There is no central `tests/` tree and adding one would break per-package
+  turbo caching and `packages/shared`'s per-file coverage thresholds.
+  `apps/api/README.md` has the full reasoning.
 - **Namespace test emails per file** (`onboarding-`, `admin-`, ...). Vitest runs test
   files in parallel against the one database the API suite starts, and `users.email` is
   globally unique, so a bare `dupe@example.test` in two files is a 409 for whichever

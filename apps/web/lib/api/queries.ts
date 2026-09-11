@@ -10,12 +10,14 @@ import {
   type OrderView,
   type ProductPage,
   type ProductSummary,
+  type DeliverySlot,
   type Quote,
+  type ReturnPickup,
   type SearchHit,
   type SearchQuery,
   type SearchResult,
 } from '@nexmarket/api-client';
-import { ACCESS_COOKIE, API_CART_COOKIE, apiGet } from './server';
+import { ACCESS_COOKIE, API_CART_COOKIE, ApiError, apiGet } from './server';
 
 /**
  * Every read the storefront performs, in one file, so the caching policy is
@@ -152,6 +154,80 @@ export function getOrder(id: string): Promise<OrderDetail> {
  * from `page.tsx` is a build error waiting for a version bump.
  */
 export async function activeOrg(): Promise<MyOrg | null> {
-  const mine = await apiGet(endpoints.myOrgs(), { auth: true });
-  return mine.items[0] ?? null;
+  try {
+    const mine = await apiGet(endpoints.myOrgs(), { auth: true });
+    return mine.items[0] ?? null;
+  } catch (error) {
+    /**
+     * NULL for a signed-out visitor, not a thrown 401.
+     *
+     * "Which organisation am I acting as" has a perfectly good answer for
+     * someone who is not signed in, and it is "none". Throwing made the seller
+     * console's LAYOUT 500 before any page could run - and a layout renders
+     * before the page it wraps, so every `redirect('/signin?next=...')` in
+     * those pages became unreachable the moment the shell started calling this.
+     *
+     * Answering null lets the shell render and the page redirect with the
+     * specific path the visitor asked for, which is the whole point of the
+     * `next` parameter.
+     */
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delivery windows for a postcode.
+ *
+ * Cached briefly and by postcode, which the URL carries. Not cached longer:
+ * `remaining` is capacity, and a picker offering a window that filled five
+ * minutes ago sends the buyer into a 409 at the last click of checkout. Thirty
+ * seconds is short enough that the race is rare and long enough that a page
+ * refresh does not re-query.
+ */
+export async function getDeliverySlots(
+  postcode: string,
+  countryCode = 'BD',
+): Promise<DeliverySlot[]> {
+  try {
+    const { slots } = await apiGet(endpoints.deliverySlots(postcode, countryCode), {
+      auth: false,
+      revalidate: 30,
+      tags: ['delivery-slots'],
+    });
+    return slots;
+  } catch {
+    /**
+     * An empty list, not a thrown page.
+     *
+     * A slot is an optional refinement of an order that is otherwise complete,
+     * so a logistics endpoint having a bad minute must not take checkout down
+     * with it. The picker renders its "no scheduled windows" line and the buyer
+     * orders anyway.
+     */
+    return [];
+  }
+}
+
+/**
+ * Collections booked for one order.
+ *
+ * Never cached: a pickup the buyer booked seconds ago has to show, and this is
+ * their own data - the rule at the top of this file is that anything belonging
+ * to a person is not cached, because a shared cache entry for one is a data
+ * leak for the rest.
+ */
+export async function getReturnPickups(orderId: string): Promise<ReturnPickup[]> {
+  try {
+    // `revalidate: false` is this transport's no-store: the default for
+    // anything personal, per the rule at the top of this file.
+    const { items } = await apiGet(endpoints.returnPickups(orderId), { auth: true });
+    return items;
+  } catch {
+    // A booking panel that cannot read existing bookings should offer to book
+    // rather than take the order page down with it.
+    return [];
+  }
 }

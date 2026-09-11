@@ -18,6 +18,7 @@ import { ListingsModule } from './modules/listings/listings.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
 import { ShippingModule } from './modules/shipping/shipping.module.js';
+import { WarehousesModule } from './modules/warehouses/warehouses.module.js';
 import { OrgsModule } from './modules/orgs/orgs.module.js';
 import { SearchModule } from './modules/search/search.module.js';
 
@@ -51,6 +52,7 @@ import { SearchModule } from './modules/search/search.module.js';
     AuthModule,
     CatalogueModule,
     FulfilmentModule,
+    WarehousesModule,
     HealthModule,
     LedgerModule,
     ListingsModule,

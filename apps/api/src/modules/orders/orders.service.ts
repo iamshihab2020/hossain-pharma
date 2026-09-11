@@ -18,7 +18,15 @@ export type OrderItemView = {
 export type OrderShipmentView = {
   id: string;
   shipmentNumber: string;
-  status: 'DISPATCHED' | 'DELIVERED';
+  /**
+   * Widened in Phase 6 by the carrier feed. The two middle states are reported
+   * by a courier, never set by a person - see `TRACKING_EVENTS`.
+   *
+   * No origin warehouse here either: this is the buyer's view of a parcel, and
+   * which building it left is the seller's business. See the note on
+   * `ShipmentView` in fulfilment.service.ts.
+   */
+  status: 'DISPATCHED' | 'IN_TRANSIT' | 'OUT_FOR_DELIVERY' | 'DELIVERED';
   carrierName: string | null;
   trackingNumber: string | null;
   dispatchedAt: Date;

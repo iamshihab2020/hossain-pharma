@@ -19,6 +19,13 @@ const confirmSchema = z.object({
   addressId: z.string().uuid(),
   paymentMethod: z.enum(PAYMENT_METHODS),
   /**
+   * The delivery window the buyer chose. OPTIONAL and staying that way: no
+   * international zone has slots, because a scheduled window across a customs
+   * border is a promise nobody can keep, so an order to Dubai has none and is
+   * not broken.
+   */
+  deliverySlotId: z.string().uuid().optional(),
+  /**
    * PRD 13: idempotency keys on all mutating endpoints. Supplied by the client
    * and unique in the database, so a double-submitted checkout returns the
    * original orders instead of placing a second set.

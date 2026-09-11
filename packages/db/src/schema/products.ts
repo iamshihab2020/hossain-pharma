@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   doublePrecision,
   index,
   integer,
@@ -10,6 +11,7 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { categories } from './categories.js';
 
 /**
@@ -94,9 +96,45 @@ export const productVariants = pgTable(
     name: text('name').notNull(),
     barcode: text('barcode'),
     position: integer('position').notNull().default(0),
+
+    /**
+     * Shipping weight and box, added in Phase 6.
+     *
+     * ON THE VARIANT, not the listing, and that follows from PRD 8.3: a
+     * catalogue entry is shared by competing sellers, and two sellers of the
+     * same phone ship the same box. Putting weight on the offer would let one
+     * seller declare 400 g and another 4 kg for identical goods and quote
+     * different shipping for it - a lever on landed price that has nothing to
+     * do with service.
+     *
+     * NULLABLE, because the catalogue predates them and a backfilled zero is a
+     * worse answer than no answer. `quoteFor()` treats an unmeasured variant as
+     * unquotable by rate card and falls back to the flat rate rather than
+     * shipping a duvet for the price of a SIM card.
+     */
+    weightGrams: integer('weight_grams'),
+    lengthMm: integer('length_mm'),
+    widthMm: integer('width_mm'),
+    heightMm: integer('height_mm'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('product_variants_product_idx').on(t.productId)],
+  (t) => [
+    check(
+      'product_variants_weight_positive',
+      sql`${t.weightGrams} IS NULL OR ${t.weightGrams} > 0`,
+    ),
+    /**
+     * All three or none. Two of three dimensions cannot produce a volume, and a
+     * partially-measured box that silently skips the volumetric comparison is
+     * the failure this constraint exists to make impossible.
+     */
+    check(
+      'product_variants_dimensions_complete',
+      sql`num_nonnulls(${t.lengthMm}, ${t.widthMm}, ${t.heightMm}) IN (0, 3)`,
+    ),
+    index('product_variants_product_idx').on(t.productId),
+  ],
 );
 
 /**

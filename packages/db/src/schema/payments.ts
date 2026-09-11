@@ -87,15 +87,23 @@ export const paymentEvents = pgTable(
 );
 
 /**
- * COD_ACCRUAL is Phase 4's placeholder posting; Phase 6 collects against it.
- * FULFILMENT is a dispatch releasing one shipment's share from clearing to the
- * seller's payable. REFUND covers a cancellation's reversal - ADR 0016 said
- * refunds would need no schema change, and Phase 5 confirmed it.
+ * COD_ACCRUAL is Phase 4's placeholder posting; COD_COLLECTION is Phase 6
+ * clearing it when the cash actually arrives. FULFILMENT is a dispatch
+ * releasing one shipment's share from clearing to the seller's payable. REFUND
+ * covers a cancellation's reversal - ADR 0016 said refunds would need no schema
+ * change, and Phase 5 confirmed it.
+ *
+ * COD_COLLECTION is its own kind rather than a second CAPTURE, even though the
+ * entries are shaped alike. The reconciliation dashboard's whole job is to
+ * separate cash that has landed from card money that never had a gap, and a
+ * shared kind would make that a join through payment_intents to answer a
+ * question the transaction itself should be able to answer.
  */
 export const transactionKind = pgEnum('transaction_kind', [
   'CAPTURE',
   'REFUND',
   'COD_ACCRUAL',
+  'COD_COLLECTION',
   'FULFILMENT',
 ]);
 

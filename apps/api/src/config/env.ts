@@ -59,6 +59,12 @@ const schema = z.object({
    * saying a buyer paid. In production it is per-provider and rotated.
    */
   PAYMENT_WEBHOOK_SECRET: z.string().min(32).default('nexmarket-dev-webhook-secret-change-me'),
+  /**
+   * Separate from the payment secret, and not sharing one is the point: a
+   * carrier and a gateway are different counterparties, and a leaked courier
+   * integration must not let anyone forge a payment.
+   */
+  SHIPPING_WEBHOOK_SECRET: z.string().min(32).default('nexmarket-dev-shipping-secret-change-me'),
 });
 
 export type ApiEnv = z.infer<typeof schema>;

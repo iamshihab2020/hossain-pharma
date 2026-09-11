@@ -151,6 +151,40 @@ export function captureEntries(total: Money): Entry[] {
   return entries;
 }
 
+/**
+ * Cash taken at the door, days after the parcel left.
+ *
+ *     DR  buyer_receivable          1000
+ *     CR  cod_receivable                  1000
+ *
+ * The posting `captureEntries`' own comment predicted: "against COD_RECEIVABLE
+ * and nothing else". COD_ACCRUAL already credited clearing at placement, so
+ * collection has no clearing leg - it converts an asset the platform was
+ * *owed in cash* into the same recognised buyer receivable a card capture
+ * produces. After it, a COD order's postings are indistinguishable from a
+ * settled card order's, which is the property that lets one payout statement
+ * reconcile both (PRD, Phase 10).
+ *
+ * PARTIAL IS A FIRST-CLASS CASE. A courier can come back short, and PRD 10.1
+ * names the reconciliation dashboard's three columns as collected, expected and
+ * outstanding. Posting only the amount actually collected is what leaves the
+ * shortfall sitting in COD_RECEIVABLE where that dashboard reads it, instead of
+ * writing off a gap nobody agreed to.
+ */
+export function codCollectionEntries(collected: Money): Entry[] {
+  if (collected.amount <= 0) {
+    throw new RangeError('A cash collection must be a positive amount');
+  }
+
+  const entries: Entry[] = [
+    { kind: 'BUYER_RECEIVABLE', ownerOrgId: null, amount: collected },
+    { kind: 'COD_RECEIVABLE', ownerOrgId: null, amount: negate(collected) },
+  ];
+
+  assertBalanced(entries);
+  return entries;
+}
+
 function negate(m: Money): Money {
   return money(-m.amount, m.currency);
 }

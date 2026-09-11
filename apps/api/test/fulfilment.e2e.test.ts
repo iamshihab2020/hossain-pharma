@@ -319,14 +319,35 @@ async function availableStock(listingId: string): Promise<number> {
 }
 
 /** One account's balance for a ledger kind, summed straight from the entries. */
-async function balance(kind: string, ownerOrgId: string | null): Promise<number> {
+/**
+ * An account's balance, optionally narrowed to ONE PAYMENT INTENT.
+ *
+ * The narrowing is not an optimisation. `BUYER_RECEIVABLE` and
+ * `PLATFORM_CLEARING` are platform-wide accounts with no owner, so an unfiltered
+ * sum is global - and vitest runs test FILES in parallel against one database.
+ * That was survivable while this file was the only one posting to them; Phase
+ * 6's COD collection made `logistics.e2e` the second, and two of the assertions
+ * below started failing in the suite while passing alone.
+ *
+ * Filtering by intent makes each assertion a claim about the order it is
+ * testing rather than about the whole database, which is what it always meant.
+ * `SELLER_PAYABLE` is per-organisation and was never exposed to this.
+ */
+async function balance(
+  kind: string,
+  ownerOrgId: string | null,
+  paymentIntentId?: string,
+): Promise<number> {
   return withTenant({ tenantId: null, userId: null, isAdmin: true }, async (tx) => {
     const rows = await tx.execute<{ total: string }>(sql`
       SELECT COALESCE(SUM(e.amount), 0) AS total
         FROM ledger_entries e
         JOIN ledger_accounts a ON a.id = e.account_id
+        JOIN transactions t ON t.id = e.transaction_id
        WHERE a.kind = ${kind}::ledger_account_kind
          AND a.owner_org_id IS NOT DISTINCT FROM ${ownerOrgId}
+         AND (${paymentIntentId ?? null}::uuid IS NULL
+              OR t.payment_intent_id = ${paymentIntentId ?? null}::uuid)
     `);
     return Number.parseInt(rows.rows[0]?.total ?? '0', 10);
   });
@@ -446,14 +467,13 @@ describe('a seller rejects an order', () => {
   });
 
   it('owes the buyer their money back and credits no seller', async () => {
-    const before = {
-      receivable: await balance('BUYER_RECEIVABLE', null),
-      payable: await balance('SELLER_PAYABLE', alpha.orgId),
-    };
+    const before = { payable: await balance('SELLER_PAYABLE', alpha.orgId) };
 
-    const { orders } = await paidBasket('reject-ledger');
+    const { orders, intentId } = await paidBasket('reject-ledger');
     const id = orderFor(orders, alpha);
-    const afterCapture = await balance('BUYER_RECEIVABLE', null);
+    // Scoped to THIS intent: the account is platform-wide and vitest runs files
+    // in parallel, so a global sum measures whatever else is checking out.
+    const afterCapture = await balance('BUYER_RECEIVABLE', null, intentId);
 
     // Read the total rather than compute it. A reversal returns the order's
     // TOTAL - subtotal plus order-level shipping and 15% VAT - because that is
@@ -466,8 +486,8 @@ describe('a seller rejects an order', () => {
 
     // The capture debited the buyer receivable; rejecting credits back exactly
     // this order's share, so the net movement is the OTHER seller's half.
-    expect(await balance('BUYER_RECEIVABLE', null)).toBe(afterCapture - alphaTotal);
-    expect(afterCapture).toBeGreaterThan(before.receivable);
+    expect(await balance('BUYER_RECEIVABLE', null, intentId)).toBe(afterCapture - alphaTotal);
+    expect(afterCapture).toBeGreaterThan(0);
 
     // Nothing was ever credited to the seller, because a payable is created by
     // DISPATCH. That is the dispatch-release decision paying for itself.
@@ -528,14 +548,14 @@ describe('a seller dispatches part of an order', () => {
   });
 
   it('pays the seller for the units that went, and no more', async () => {
-    const { orders } = await paidBasket('ship-money');
+    const { orders, intentId } = await paidBasket('ship-money');
     const id = orderFor(orders, alpha);
     await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
     const [line] = await linesOf(alpha, id);
     if (!line) throw new Error('no line');
 
     const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
-    const commissionBefore = await balance('PLATFORM_REVENUE_COMMISSION', null);
+    const commissionBefore = await balance('PLATFORM_REVENUE_COMMISSION', null, intentId);
 
     const res = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
       items: [{ orderItemId: line.id, quantity: 1 }],
@@ -549,13 +569,13 @@ describe('a seller dispatches part of an order', () => {
     // A payable is a CREDIT, so it is negative in a signed ledger.
     const payable = parcel.released.amount - parcel.commission.amount;
     expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(payableBefore - payable);
-    expect(await balance('PLATFORM_REVENUE_COMMISSION', null)).toBe(
+    expect(await balance('PLATFORM_REVENUE_COMMISSION', null, intentId)).toBe(
       commissionBefore - parcel.commission.amount,
     );
   });
 
   it('closes the order to exactly zero outstanding on the last parcel', async () => {
-    const { orders } = await paidBasket('ship-all');
+    const { orders, intentId } = await paidBasket('ship-all');
     const id = orderFor(orders, alpha);
     await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
     const [line] = await linesOf(alpha, id);
@@ -563,7 +583,7 @@ describe('a seller dispatches part of an order', () => {
 
     const total = (await orderView(alpha, id)).total.amount;
     const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
-    const commissionBefore = await balance('PLATFORM_REVENUE_COMMISSION', null);
+    const commissionBefore = await balance('PLATFORM_REVENUE_COMMISSION', null, intentId);
 
     // Two parcels, 1 then 2, so the split crosses the allocation boundary.
     const first = await asSeller(alpha, 'POST', `/seller/orders/${id}/shipments`, {
@@ -582,7 +602,7 @@ describe('a seller dispatches part of an order', () => {
     // THE ACCEPTANCE ARITHMETIC. Two parcels' releases must sum EXACTLY to what
     // one full capture would have paid - no minor unit invented, none lost.
     const payableAfter = await balance('SELLER_PAYABLE', alpha.orgId);
-    const commissionAfter = await balance('PLATFORM_REVENUE_COMMISSION', null);
+    const commissionAfter = await balance('PLATFORM_REVENUE_COMMISSION', null, intentId);
     const paid = payableBefore - payableAfter;
     const commission = commissionBefore - commissionAfter;
     expect(paid + commission).toBe(total);
@@ -774,16 +794,16 @@ describe('a buyer cancels their own order', () => {
   });
 
   it('owes the buyer their money back and still credits no seller', async () => {
-    const { buyer, orders } = await paidBasket('buyer-cancel-ledger');
+    const { buyer, orders, intentId } = await paidBasket('buyer-cancel-ledger');
     const id = orderFor(orders, alpha);
     const total = (await orderView(alpha, id)).total.amount;
 
-    const receivableBefore = await balance('BUYER_RECEIVABLE', null);
+    const receivableBefore = await balance('BUYER_RECEIVABLE', null, intentId);
     const payableBefore = await balance('SELLER_PAYABLE', alpha.orgId);
 
     await asBuyer(buyer.token, 'POST', `/me/orders/${id}/cancel`, {});
 
-    expect(await balance('BUYER_RECEIVABLE', null)).toBe(receivableBefore - total);
+    expect(await balance('BUYER_RECEIVABLE', null, intentId)).toBe(receivableBefore - total);
     expect(await balance('SELLER_PAYABLE', alpha.orgId)).toBe(payableBefore);
   });
 
@@ -853,7 +873,7 @@ describe('a seller cancels outstanding lines', () => {
   });
 
   it('reverses only the cancelled units, leaving the dispatched ones paid', async () => {
-    const { orders } = await paidBasket('seller-cancel-money');
+    const { orders, intentId } = await paidBasket('seller-cancel-money');
     const id = orderFor(orders, alpha);
     await asSeller(alpha, 'POST', `/seller/orders/${id}/accept`, {});
     const [line] = await linesOf(alpha, id);
@@ -865,7 +885,7 @@ describe('a seller cancels outstanding lines', () => {
     });
     const released = json<{ released: { amount: number } }>(parcel).released.amount;
     const total = (await orderView(alpha, id)).total.amount;
-    const receivableBefore = await balance('BUYER_RECEIVABLE', null);
+    const receivableBefore = await balance('BUYER_RECEIVABLE', null, intentId);
 
     await asSeller(alpha, 'POST', `/seller/orders/${id}/cancel`, {
       items: [{ orderItemId: line.id, quantity: 2 }],
@@ -875,7 +895,7 @@ describe('a seller cancels outstanding lines', () => {
     // The reversal is the order total MINUS what already shipped - the two
     // halves partition the order exactly, which is the whole point of
     // allocating per unit up front.
-    expect(await balance('BUYER_RECEIVABLE', null)).toBe(receivableBefore - (total - released));
+    expect(await balance('BUYER_RECEIVABLE', null, intentId)).toBe(receivableBefore - (total - released));
   });
 
   it('refuses to cancel units that already shipped', async () => {
@@ -1154,7 +1174,7 @@ describe('the published contract', () => {
  */
 describe('PRD 11 Phase 5: the demo', () => {
   it('fulfils one seller half while the other stays pending, and the books stay true', async () => {
-    const { buyer, orders } = await paidBasket('demo');
+    const { buyer, orders, intentId } = await paidBasket('demo');
     const alphaOrder = orderFor(orders, alpha);
     const betaOrder = orderFor(orders, beta);
 
@@ -1164,7 +1184,7 @@ describe('PRD 11 Phase 5: the demo', () => {
     const opening = {
       alphaPayable: await balance('SELLER_PAYABLE', alpha.orgId),
       betaPayable: await balance('SELLER_PAYABLE', beta.orgId),
-      commission: await balance('PLATFORM_REVENUE_COMMISSION', null),
+      commission: await balance('PLATFORM_REVENUE_COMMISSION', null, intentId),
     };
 
     // 1. Both orders are paid and nobody is owed anything yet: a capture parks
@@ -1209,7 +1229,7 @@ describe('PRD 11 Phase 5: the demo', () => {
     // 4. THE ARITHMETIC. Alpha has been paid, in two pieces, exactly the order
     //    total - no minor unit invented and none lost. Beta still has nothing.
     const alphaPaid = opening.alphaPayable - (await balance('SELLER_PAYABLE', alpha.orgId));
-    const commissionTaken = opening.commission - (await balance('PLATFORM_REVENUE_COMMISSION', null));
+    const commissionTaken = opening.commission - (await balance('PLATFORM_REVENUE_COMMISSION', null, intentId));
     expect(alphaPaid + commissionTaken).toBe(alphaTotal);
     expect(await balance('SELLER_PAYABLE', beta.orgId)).toBe(opening.betaPayable);
 

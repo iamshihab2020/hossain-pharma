@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { ChevronLeft } from 'lucide-react';
-import { getOrder } from '@/lib/api/queries';
+import { getDeliverySlots, getOrder, getReturnPickups } from '@/lib/api/queries';
 import { ApiError, isSignedIn } from '@/lib/api/server';
 import { OrderStatusBadge } from '@/app/orders/page';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +19,8 @@ import {
 import { formatDate, formatMoney } from '@/lib/format';
 import { OrderTimeline } from '@/components/order-timeline';
 import { ShipmentCard } from '@/components/shipment-card';
+import { ReturnPickupPanel } from '@/components/return-pickup';
+import { marketToday } from '@/lib/delivery';
 
 export const metadata: Metadata = { title: 'Order' };
 
@@ -46,6 +48,27 @@ export default async function OrderDetailPage({ params }: Params): Promise<React
     if (error instanceof ApiError && (error.status === 404 || error.status === 403)) notFound();
     throw error;
   }
+
+  /**
+   * Collection windows come from the DELIVERY address, not a new one.
+   *
+   * A courier collects from where the parcel went - asking the buyer for an
+   * address again would let them send a van somewhere the order never was, and
+   * the API refuses a slot outside the delivered zone anyway.
+   *
+   * Fetched only for a delivered order, because that is the only state the
+   * panel renders in, and two requests for a panel nobody sees is two requests
+   * on every order page.
+   */
+  const delivered = order.status === 'DELIVERED';
+  const [returnSlots, pickups] = delivered
+    ? await Promise.all([
+        getDeliverySlots(order.shippingAddress.postcode, order.shippingAddress.countryCode),
+        getReturnPickups(order.id),
+      ])
+    : [[], []];
+  const pickup = pickups.find((entry) => entry.status === 'SCHEDULED') ?? null;
+  const today = marketToday().toISOString().slice(0, 10);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6">
@@ -140,6 +163,24 @@ export default async function OrderDetailPage({ params }: Params): Promise<React
           View invoice
         </Link>
       </p>
+
+      {/* Only once it has ARRIVED. Nothing can be collected that has not been
+          delivered, and an order still in transit that the buyer no longer
+          wants is a CANCELLATION - a different operation with a different
+          ledger consequence, which Phase 5 already built. */}
+      {order.status === 'DELIVERED' && (
+        <section className="mt-8 rounded-lg border p-4">
+          <h2 className="text-base font-medium">Send it back</h2>
+          <div className="mt-3">
+            <ReturnPickupPanel
+              orderId={order.id}
+              slots={returnSlots}
+              existing={pickup}
+              today={today}
+            />
+          </div>
+        </section>
+      )}
 
       <section className="mt-6">
         <h2 className="text-base font-medium">History</h2>

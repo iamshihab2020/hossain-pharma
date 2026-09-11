@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition, type ReactNode } from 'react';
 import { Banknote, CreditCard, Loader2 } from 'lucide-react';
-import type { Quote } from '@nexmarket/api-client';
+import type { DeliverySlot, Quote } from '@nexmarket/api-client';
 import { confirmCheckout } from '@/app/actions/checkout';
 import { formatMoney } from '@/lib/format';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Separator } from '@/components/ui/separator';
+import { SlotPicker } from '@/components/slot-picker';
 
 /**
  * The payment panel.
@@ -31,13 +32,28 @@ import { Separator } from '@/components/ui/separator';
 export function CheckoutPanel({
   addressId,
   quote,
+  slots,
+  today,
 }: {
   addressId: string;
   quote: Quote;
+  /** Windows for the address's zone. Empty on an unserviceable or foreign route. */
+  slots: readonly DeliverySlot[];
+  today: string;
 }): ReactNode {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [method, setMethod] = useState<'cod' | 'mock'>('cod');
+  /**
+   * COD is the default only where it is POSSIBLE.
+   *
+   * `zone.codAllowed` is false where a courier will deliver but will not carry
+   * cash back, and defaulting to a method the buyer cannot use means the first
+   * thing the panel does is refuse them. The API enforces the same rule on
+   * confirm - hiding the radio is a courtesy, not the control.
+   */
+  const codAllowed = quote.zone?.codAllowed ?? true;
+  const [method, setMethod] = useState<'cod' | 'mock'>(codAllowed ? 'cod' : 'mock');
+  const [slotId, setSlotId] = useState<string | null>(null);
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [priceChange, setPriceChange] = useState<string | null>(null);
@@ -59,6 +75,7 @@ export function CheckoutPanel({
         paymentMethod: method,
         idempotencyKey,
         expectedTotal: quote.total,
+        ...(slotId === null ? {} : { deliverySlotId: slotId }),
         ...(quote.requiresAgeCheck && dateOfBirth !== '' ? { dateOfBirth } : {}),
       });
 
@@ -112,26 +129,48 @@ export function CheckoutPanel({
           </Alert>
         )}
 
+        {/* ABOVE the payment choice, because when it arrives is the question a
+            buyer answers first - and on an international route there is nothing
+            to answer, which the picker says in one line rather than an empty
+            grid. */}
+        <div className="flex flex-col gap-2">
+          <Label className="text-xs text-muted-foreground">Delivery window</Label>
+          <SlotPicker slots={slots} value={slotId} onChange={setSlotId} today={today} />
+        </div>
+
+        <Separator />
+
         <RadioGroup
           value={method}
           onValueChange={(value) => { setMethod(value === 'mock' ? 'mock' : 'cod'); }}
           className="gap-2"
         >
-          <label
-            htmlFor="pay-cod"
-            className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 has-[:checked]:border-primary has-[:checked]:bg-wash"
-          >
-            <RadioGroupItem value="cod" id="pay-cod" className="mt-1" />
-            <span className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-2 text-sm font-medium">
-                <Banknote className="h-4 w-4" aria-hidden="true" />
-                Cash on delivery
+          {/* WITHDRAWN, not disabled, where no courier collects cash. A greyed
+              radio invites clicking; a sentence explains. The `warn` token
+              rather than destructive, because this is a fact about geography
+              and not a mistake the buyer made. */}
+          {codAllowed ? (
+            <label
+              htmlFor="pay-cod"
+              className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 has-[:checked]:border-primary has-[:checked]:bg-wash"
+            >
+              <RadioGroupItem value="cod" id="pay-cod" className="mt-1" />
+              <span className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <Banknote className="h-4 w-4" aria-hidden="true" />
+                  Cash on delivery
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Pay {formatMoney(quote.total)} in cash when it arrives.
+                </span>
               </span>
-              <span className="text-xs text-muted-foreground">
-                Pay {formatMoney(quote.total)} in cash when it arrives.
-              </span>
-            </span>
-          </label>
+            </label>
+          ) : (
+            <p className="rounded-lg border border-warn/40 bg-warn-wash p-3 text-xs text-warn">
+              No courier collects cash in {quote.zone?.areaName ?? 'that area'}. Pay by card
+              to have it delivered there.
+            </p>
+          )}
 
           <label
             htmlFor="pay-card"

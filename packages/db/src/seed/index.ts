@@ -3,6 +3,7 @@ import type * as schema from '../schema/index.js';
 import { seedCategories } from './categories.js';
 import { seedDemoMarket, type DemoSummary } from './demo.js';
 import { seedListings } from './listings.js';
+import { seedLogistics, seedVariantMeasurements, type LogisticsSummary } from './logistics.js';
 import { seedOrganisations } from './organisations.js';
 import { seedProducts } from './products.js';
 import { seedOrgMembers } from './org-members.js';
@@ -12,19 +13,21 @@ import { seedSearchIndex } from './search.js';
 
 type Db = NodePgDatabase<typeof schema>;
 
-export type SeedSummary = DemoSummary & {
-  countries: number;
-  currencies: number;
-  organisations: number;
-  users: number;
-  orgMembers: number;
-  categories: number;
-  products: number;
-  variants: number;
-  warehouses: number;
-  listings: number;
-  searchDocuments: number;
-};
+export type SeedSummary = DemoSummary &
+  LogisticsSummary & {
+    countries: number;
+    currencies: number;
+    organisations: number;
+    users: number;
+    orgMembers: number;
+    categories: number;
+    products: number;
+    variants: number;
+    warehouses: number;
+    listings: number;
+    searchDocuments: number;
+    measuredVariants: number;
+  };
 
 /**
  * Idempotent by construction: every insert uses onConflictDoNothing, so
@@ -45,9 +48,17 @@ export async function seed(db: Db): Promise<SeedSummary> {
   const categories = await seedCategories(db);
   const { products, variants } = await seedProducts(db);
   const { warehouses, listings } = await seedListings(db);
+  // Geography before anything that quotes shipping. Platform-owned and
+  // tenant-free, so it needs no withTenant and depends on nothing above it
+  // except the country codes in reference data.
+  const logistics = await seedLogistics(db);
   // The demoable market: more sellers on one product than the acceptance
   // fixture needs, so the storefront has a real comparison to render.
   const demo = await seedDemoMarket(db);
+  // AFTER the demo market, not merely after the catalogue. The demo seeds
+  // variants of its own, and measuring before it runs leaves exactly the
+  // products the storefront actually renders unquotable.
+  const { measuredVariants } = await seedVariantMeasurements(db);
   // LAST, and it must be: a search document aggregates over the listings above,
   // so an index built before them describes a catalogue nobody is selling.
   const searchDocuments = await seedSearchIndex(db);
@@ -61,6 +72,8 @@ export async function seed(db: Db): Promise<SeedSummary> {
     variants,
     warehouses,
     listings,
+    ...logistics,
+    measuredVariants,
     ...demo,
     searchDocuments,
   };

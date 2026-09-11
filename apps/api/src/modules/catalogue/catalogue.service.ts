@@ -1,7 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { schema, withTenant, type Transaction } from '@nexmarket/db';
-import { rankOffers, type BuyBox, type OfferInput } from '@nexmarket/shared';
+import {
+  chargeableWeightGrams,
+  rankOffers,
+  type BuyBox,
+  type OfferInput,
+} from '@nexmarket/shared';
 
 export type CategoryNode = {
   id: string;
@@ -35,6 +40,19 @@ export type ProductPage = {
     id: string;
     sku: string;
     name: string;
+    /**
+     * CHARGEABLE grams - `max(actual, volumetric)` - not the scale weight.
+     *
+     * On the wire so the page's delivery check can ask for a real rate rather
+     * than a zone with no price. Null for a variant nobody has measured, which
+     * the check renders as an estimate without a number.
+     *
+     * The chargeable figure rather than the raw columns because the page has no
+     * business doing courier arithmetic, and shipping three numbers it must
+     * combine correctly is three chances to combine them differently from the
+     * server.
+     */
+    chargeableGrams: number | null;
     buyBox: PublicBuyBox;
   }[];
 };
@@ -232,6 +250,19 @@ export class CatalogueService {
           id: variant.id,
           sku: variant.sku,
           name: variant.name,
+          chargeableGrams:
+            variant.weightGrams === null
+              ? null
+              : chargeableWeightGrams(
+                  variant.weightGrams,
+                  variant.lengthMm !== null && variant.widthMm !== null && variant.heightMm !== null
+                    ? {
+                        lengthMm: variant.lengthMm,
+                        widthMm: variant.widthMm,
+                        heightMm: variant.heightMm,
+                      }
+                    : null,
+                ),
           buyBox: toPublicBuyBox(rankOffers(offers.byVariant.get(variant.id) ?? []), offers.sellers),
         })),
       };

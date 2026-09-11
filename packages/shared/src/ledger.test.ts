@@ -6,6 +6,7 @@ import {
   assertBalanced,
   captureEntries,
   requiresOwner,
+  codCollectionEntries,
 } from './ledger.js';
 import { releaseEntries } from './fulfilment.js';
 import { CurrencyMismatchError, money } from './money.js';
@@ -197,3 +198,34 @@ function sum(entries: readonly Entry[]): number {
 function totalFor(entries: readonly Entry[], kind: Entry['kind']): number {
   return entries.filter((e) => e.kind === kind).reduce((acc, e) => acc + e.amount.amount, 0);
 }
+
+describe('codCollectionEntries', () => {
+  it('clears the receivable the accrual created', () => {
+    // COD_ACCRUAL debited COD_RECEIVABLE and credited clearing at placement.
+    // Collection credits COD_RECEIVABLE back to zero and debits the buyer
+    // receivable, leaving a COD order posted exactly like a captured card one.
+    expect(codCollectionEntries(money(1_000, 'BDT'))).toEqual([
+      { kind: 'BUYER_RECEIVABLE', ownerOrgId: null, amount: money(1_000, 'BDT') },
+      { kind: 'COD_RECEIVABLE', ownerOrgId: null, amount: money(-1_000, 'BDT') },
+    ]);
+  });
+
+  it('balances', () => {
+    expect(() => assertBalanced(codCollectionEntries(money(2_499, 'BDT')))).not.toThrow();
+  });
+
+  it('posts only what was actually collected, leaving the shortfall outstanding', () => {
+    // A courier who comes back with 2000 of 2400 has collected 2000. Posting
+    // the full amount would write off a 400 gap nobody agreed to - and that gap
+    // is the whole content of the reconciliation dashboard's third column.
+    const entries = codCollectionEntries(money(2_000, 'BDT'));
+    expect(entries[1]?.amount).toEqual(money(-2_000, 'BDT'));
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -100],
+  ])('refuses a %s collection', (_name, amount) => {
+    expect(() => codCollectionEntries(money(amount, 'BDT'))).toThrow(/positive amount/);
+  });
+});

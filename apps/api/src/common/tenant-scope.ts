@@ -2,8 +2,8 @@ import { sql } from 'drizzle-orm';
 import type { Transaction } from '@nexmarket/db';
 
 /**
- * The four places the tenant GUC is moved outside `withTenant`, and the only
- * four.
+ * The five places the tenant GUC is moved outside `withTenant`, and the only
+ * five.
  *
  * Both are transaction-local (`set_config(..., true)`), both restore in a
  * `finally`, and both wrap the smallest possible amount of work. Nothing here
@@ -24,6 +24,14 @@ import type { Transaction } from '@nexmarket/db';
  *    file demands asked and answered in writing (ADR 0019): the work is
  *    genuinely a non-tenant initiating tenant-scoped writes, not tenant-scoped
  *    work being done from the wrong place.
+ *  - BOOKING A RETURN PICKUP, added in Phase 6. The same shape as cancellation
+ *    and admitted on the same grounds: a buyer, who is not a tenant, writing to
+ *    a tenant-owned table for one seller whose id came from `orders.tenant_id`
+ *    inside this transaction, after `own_orders` proved the order is theirs.
+ *    `return_pickups` has its own buyer INSERT policy (migration 0017), so the
+ *    escape is not the only control there - but the accompanying `order_events`
+ *    write has no buyer-insert policy and must never have one, and that is the
+ *    write that needs the scope.
  *
  * The third was added in Phase 4 after the two alternatives were rejected in
  * writing (ADR 0017): running the whole checkout as a platform admin hands a
@@ -32,10 +40,15 @@ import type { Transaction } from '@nexmarket/db';
  * to themselves against any seller - an order row is what a seller's fulfilment
  * queue reads.
  *
- * IF YOU ARE ADDING A FIFTH, STOP. The question to answer first is whether the
+ * IF YOU ARE ADDING A SIXTH, STOP. The question to answer first is whether the
  * work is genuinely not tenant-scoped, or whether it is tenant-scoped work
  * being done from the wrong place. It has been the second more often than the
  * first.
+ *
+ * Note the pattern in the two most recent additions: both are a BUYER acting on
+ * their own order. If a seventh has that shape too, the right move is probably
+ * a named helper for "a buyer acting on one of their orders" rather than a
+ * seventh bare call - three of a kind is a concept, not a coincidence.
  */
 
 /**
@@ -61,11 +74,11 @@ export async function withoutTenantScope<T>(tx: Transaction, fn: () => Promise<T
 /**
  * Runs `fn` as `tenantId`, then restores whatever was set.
  *
- * Safe only when `tenantId` is a value THIS transaction produced. Three cases:
+ * Safe only when `tenantId` is a value THIS transaction produced. Four cases:
  * founding an organisation; checkout, where the seller id comes from
- * `listings.tenant_id`; and buyer cancellation, where it comes from
- * `orders.tenant_id` after `own_orders` has proved the order is the caller's.
- * In both of the latter the id is read from the database inside the
+ * `listings.tenant_id`; and buyer cancellation and return-pickup booking, where
+ * it comes from `orders.tenant_id` after `own_orders` has proved the order is
+ * the caller's. In the last three the id is read from the database inside the
  * transaction, because the buyer chose a LISTING or an ORDER, never a tenant.
  *
  * Never pass a caller-supplied id: that is exactly the authorisation check the

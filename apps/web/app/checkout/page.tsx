@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { getAddresses, getCart, getQuote } from '@/lib/api/queries';
+import { getAddresses, getCart, getDeliverySlots, getQuote } from '@/lib/api/queries';
 import { isSignedIn } from '@/lib/api/server';
 import { AddressForm } from '@/components/address-form';
 import { CheckoutPanel } from '@/components/checkout-panel';
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { formatMoney } from '@/lib/format';
+import { marketToday } from '@/lib/delivery';
 
 export const metadata: Metadata = { title: 'Checkout' };
 
@@ -78,6 +79,18 @@ export default async function CheckoutPage({
   if (selected === undefined) redirect('/cart');
 
   const quote = await getQuote(selected.id);
+
+  /**
+   * Windows for the ADDRESS, fetched after the quote because the quote is what
+   * proved the address resolves to a zone at all.
+   *
+   * `marketToday` rather than `new Date()`: the picker labels a column "Today",
+   * and which day that is depends on where the courier is, not where the server
+   * is. Resolved once here so the server and the hydrated client cannot
+   * disagree across midnight.
+   */
+  const slots = await getDeliverySlots(selected.postcode, selected.countryCode);
+  const today = marketToday().toISOString().slice(0, 10);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -158,7 +171,7 @@ export default async function CheckoutPage({
         </div>
 
         <aside className="lg:sticky lg:top-20 lg:self-start">
-          <CheckoutPanel addressId={selected.id} quote={quote} />
+          <CheckoutPanel addressId={selected.id} quote={quote} slots={slots} today={today} />
         </aside>
       </div>
     </div>

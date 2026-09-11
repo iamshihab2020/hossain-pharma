@@ -5,3 +5,5 @@ export * from './ledger.js';
 export * from './pricing.js';
 export * from './order-state.js';
 export * from './fulfilment.js';
+export * from './logistics.js';
+export * from './allocation.js';

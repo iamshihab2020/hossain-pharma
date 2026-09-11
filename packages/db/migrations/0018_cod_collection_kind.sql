@@ -1,0 +1,1 @@
+ALTER TYPE "public"."transaction_kind" ADD VALUE 'COD_COLLECTION' BEFORE 'FULFILMENT';

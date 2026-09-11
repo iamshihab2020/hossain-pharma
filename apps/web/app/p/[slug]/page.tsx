@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { ApiError } from '@/lib/api/server';
 import { getProduct, getSimilar } from '@/lib/api/queries';
+import { DeliveryCheck } from '@/components/delivery-check';
 import { OfferTable } from '@/components/offer-table';
 import { ProductCard } from '@/components/product-card';
 import { Badge } from '@/components/ui/badge';
@@ -113,6 +114,16 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
               </TabsList>
               {product.variants.map((variant) => (
                 <TabsContent key={variant.id} value={variant.id} className="mt-6">
+                  {/* ABOVE the comparison, because the answer changes which
+                      offer wins: delivery is part of landed price, and a buyer
+                      who scrolls past three sellers before learning we do not
+                      come to their street has been shown a table for nothing.
+                      Per variant, since the box and its weight are the
+                      variant's. */}
+                  <DeliveryCheck
+                    chargeableGrams={variant.chargeableGrams}
+                    dispatchDays={variant.buyBox.winner?.dispatchDays ?? 1}
+                  />
                   <OfferTable buyBox={variant.buyBox} productName={product.name} />
                 </TabsContent>
               ))}
@@ -122,7 +133,13 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
               This product has no variants to sell yet.
             </p>
           ) : (
-            <OfferTable buyBox={primary.buyBox} productName={product.name} />
+            <>
+              <DeliveryCheck
+                chargeableGrams={primary.chargeableGrams}
+                dispatchDays={primary.buyBox.winner?.dispatchDays ?? 1}
+              />
+              <OfferTable buyBox={primary.buyBox} productName={product.name} />
+            </>
           )}
         </div>
       </div>

@@ -1,14 +1,18 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray, sql, sum } from 'drizzle-orm';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { and, asc, eq, inArray, ne, sql, sum } from 'drizzle-orm';
 import { type Transaction, schema } from '@nexmarket/db';
 import {
+  type AllocationPlan,
   InvalidTransitionError,
   type OrderStatus,
+  type WarehouseStock,
+  allocateStock,
   assertTransition,
   money,
   releaseEntries,
   reversalEntries,
   shareFor,
+  splitsAcrossWarehouses,
   statusFromCoverage,
   unitShares,
 } from '@nexmarket/shared';
@@ -18,7 +22,11 @@ import { LedgerService } from '../ledger/ledger.service.js';
 import { ListingsService } from '../listings/listings.service.js';
 import { OrdersService, type OrderDetailView } from '../orders/orders.service.js';
 import { SearchIndexService } from '../search/search-index.service.js';
-import type { CreateShipmentInput } from './dto.js';
+import type { AutoDispatchInput, CreateShipmentInput } from './dto.js';
+import {
+  SHIPPING_PROVIDER,
+  type ShippingProvider,
+} from '../shipping/shipping-provider.port.js';
 import { OrderEventsService, type EventActor } from './order-events.service.js';
 
 /** One order line, with everything the coverage arithmetic needs. */
@@ -49,7 +57,24 @@ export type ShipmentView = {
   id: string;
   orderId: string;
   shipmentNumber: string;
-  status: 'DISPATCHED' | 'DELIVERED';
+  /**
+   * Widened in Phase 6 by the carrier feed. The two middle states are reported
+   * by a courier, never set by a person - see `TRACKING_EVENTS`.
+   */
+  status: 'DISPATCHED' | 'IN_TRANSIT' | 'OUT_FOR_DELIVERY' | 'DELIVERED';
+
+  /**
+   * NO `warehouseId`, deliberately, and this view is read by BUYERS.
+   *
+   * Which of a seller's buildings a parcel left is warehouse operations, not
+   * order history - the same call migration 0020 makes by giving
+   * `order_item_allocations` no buyer policy at all. Publishing it here would
+   * hand every buyer a seller's internal stock distribution, one order at a
+   * time.
+   *
+   * The seller console gets origins from the dispatch plan and the
+   * auto-dispatch response, which name warehouses outright.
+   */
   carrierName: string | null;
   trackingNumber: string | null;
   released: { amount: number; currency: string };
@@ -61,6 +86,28 @@ export type ShipmentView = {
 
 /** A replayed idempotency key returns the ORIGINAL parcel, never a second one. */
 export type DispatchResult = { shipment: ShipmentView; created: boolean };
+
+/** One warehouse's share of a dispatch, named for the seller rather than keyed. */
+export type PlannedAllocation = {
+  warehouseId: string;
+  warehouseName: string;
+  picks: { orderItemId: string; quantity: number }[];
+};
+
+/** A dry run: what auto-dispatch would produce, shown before the button. */
+export type DispatchPlanView = {
+  splits: boolean;
+  allocations: PlannedAllocation[];
+  /** Units no warehouse can fill. A short plan is still worth dispatching. */
+  unfulfilled: { orderItemId: string; quantity: number }[];
+};
+
+export type AutoDispatchResult = {
+  shipments: ShipmentView[];
+  splits: boolean;
+  warehouses: { id: string; name: string }[];
+  unfulfilled: { orderItemId: string; quantity: number }[];
+};
 
 /**
  * The write half of an order's life: accept, reject, dispatch, deliver, cancel.
@@ -85,6 +132,17 @@ export class FulfilmentService {
     private readonly ledger: LedgerService,
     private readonly listings: ListingsService,
     private readonly search: SearchIndexService,
+    /**
+     * The PORT, not the mock.
+     *
+     * Dispatch needs one thing from a carrier - hand over a parcel, get a
+     * tracking number - and depending on the concrete adapter would make
+     * swapping it a change here rather than one line in ShippingModule.
+     * TrackingService deliberately takes the concrete one instead, because the
+     * time-compressed schedule it reads is a property of the MOCK and not
+     * something a real carrier would ever expose.
+     */
+    @Inject(SHIPPING_PROVIDER) private readonly carrier: ShippingProvider,
   ) {}
 
   /** The seller takes the order on. */
@@ -92,6 +150,7 @@ export class FulfilmentService {
     const { tx, userId } = getRequestContext();
     const order = await this.load(tx, orderId);
     this.assertAllowed(order.status, 'ACCEPTED', 'SELLER');
+    await this.assertPayableOrCod(tx, order);
 
     await tx
       .update(schema.orders)
@@ -180,6 +239,7 @@ export class FulfilmentService {
         shipmentNumber: shipmentNumber(),
         carrierName: input.carrierName ?? null,
         trackingNumber: input.trackingNumber ?? null,
+        warehouseId: input.warehouseId ?? null,
         releaseAmount: share.total.amount,
         releaseCommission: share.commission.amount,
         currency: share.total.currency,
@@ -206,7 +266,10 @@ export class FulfilmentService {
     for (const pick of input.items) {
       const line = byId.get(pick.orderItemId);
       if (line === undefined) continue;
-      await this.dispatchStock(tx, line.listingId, pick.quantity);
+      await this.dispatchStock(tx, line.listingId, pick.quantity, input.warehouseId);
+      if (input.warehouseId !== undefined) {
+        await this.consumeAllocation(tx, pick.orderItemId, input.warehouseId, pick.quantity);
+      }
       // NO reindex here, and that is not an oversight. on_hand and reserved
       // fall TOGETHER, so `available = on_hand - reserved` is unchanged: the
       // goods left the shelf and left their reservation at the same moment, and
@@ -236,6 +299,303 @@ export class FulfilmentService {
     });
 
     return { shipment: toShipmentView(row, input.items), created: true };
+  }
+
+  /**
+   * What dispatching everything outstanding WOULD look like, without doing it.
+   *
+   * The seller console shows this before the button is pressed, because "this
+   * order will go as two parcels from two warehouses" is something a seller
+   * wants to know while they can still change it - by moving stock, or by
+   * shipping one line now and the rest later.
+   */
+  async plan(orderId: string): Promise<DispatchPlanView> {
+    const { tx } = getRequestContext();
+    const order = await this.load(tx, orderId);
+    const outstanding = outstandingOf(order);
+
+    if (outstanding.length === 0) {
+      return { splits: false, allocations: [], unfulfilled: [] };
+    }
+
+    const { plan, warehouseNames } = await this.planFor(tx, order, outstanding);
+
+    return {
+      splits: splitsAcrossWarehouses(plan),
+      allocations: plan.allocations.map((allocation) => ({
+        warehouseId: allocation.warehouseId,
+        warehouseName: warehouseNames.get(allocation.warehouseId) ?? 'Unknown warehouse',
+        picks: allocation.picks.map((pick) => ({ ...pick })),
+      })),
+      unfulfilled: plan.unfulfilled.map((pick) => ({ ...pick })),
+    };
+  }
+
+  /**
+   * Dispatches every outstanding unit, as one parcel per warehouse.
+   *
+   * PRD 11 Phase 6's acceptance criterion: "an order allocates across two
+   * warehouses and produces two shipments".
+   *
+   * EACH PARCEL GETS ITS OWN IDEMPOTENCY KEY, derived from the request key and
+   * the warehouse. That is what makes a retried auto-dispatch safe: the unique
+   * constraint on `shipments.idempotency_key` matches every parcel the first
+   * attempt created, `createShipment` returns those unchanged, and only
+   * genuinely new parcels are made. One key for the whole request would make
+   * the second parcel look like a duplicate of the first.
+   */
+  async autoDispatch(orderId: string, input: AutoDispatchInput): Promise<AutoDispatchResult> {
+    const { tx } = getRequestContext();
+    const order = await this.load(tx, orderId);
+
+    /**
+     * THE REPLAY CHECK COMES BEFORE THE STATUS CHECK, and the order matters.
+     *
+     * A successful auto-dispatch leaves the order SHIPPED, and SHIPPED has no
+     * SHIPPED transition - so a retry hit `assertAllowed` and got a 409 saying
+     * the order could not be dispatched, when in fact it already had been. A
+     * client that is unsure whether its request landed is exactly the client
+     * that retries, and answering "invalid transition" tells it the opposite of
+     * the truth.
+     *
+     * `createShipment` has the same protection one level down, keyed on the
+     * per-parcel idempotency key; this is the same idea for the request that
+     * produced several of them.
+     */
+    const replayed = await this.shipmentsForRequest(tx, orderId, input.idempotencyKey);
+    if (replayed.length > 0) {
+      return {
+        shipments: replayed,
+        splits: replayed.length > 1,
+        warehouses: await this.warehousesOf(tx, replayed),
+        unfulfilled: [],
+      };
+    }
+
+    this.assertAllowed(order.status, 'SHIPPED', 'SELLER');
+
+    const outstanding = outstandingOf(order);
+    if (outstanding.length === 0) {
+      throw new ConflictException({
+        code: 'NOTHING_OUTSTANDING',
+        message: 'Every unit on this order has already shipped or been cancelled.',
+      });
+    }
+
+    const { plan, warehouseNames } = await this.planFor(tx, order, outstanding);
+
+    if (plan.allocations.length === 0) {
+      throw new ConflictException({
+        code: 'NO_STOCK',
+        message: 'None of your warehouses holds stock for the outstanding lines.',
+      });
+    }
+
+    const shipments: ShipmentView[] = [];
+    for (const allocation of plan.allocations) {
+      /**
+       * A carrier booking PER PARCEL, not per order.
+       *
+       * Two boxes leaving two buildings are two consignments with two tracking
+       * numbers, and a buyer following one number for a shipment that is
+       * really two is being told something false.
+       */
+      const booking =
+        input.bookCarrier === true
+          ? await this.carrier.book({
+              shipmentId: allocation.warehouseId,
+              originPostcode: '',
+              destinationPostcode: '',
+              chargeableGrams: null,
+            })
+          : null;
+
+      const carrierFields =
+        booking === null
+          ? {
+              ...(input.carrierName === undefined ? {} : { carrierName: input.carrierName }),
+              ...(input.trackingNumber === undefined
+                ? {}
+                : { trackingNumber: input.trackingNumber }),
+            }
+          : { carrierName: booking.carrierName, trackingNumber: booking.trackingNumber };
+
+      const { shipment } = await this.createShipment(orderId, {
+        items: allocation.picks.map((pick) => ({ ...pick })),
+        warehouseId: allocation.warehouseId,
+        idempotencyKey: `${input.idempotencyKey}:${allocation.warehouseId}`,
+        ...carrierFields,
+      });
+      shipments.push(shipment);
+    }
+
+    return {
+      shipments,
+      splits: shipments.length > 1,
+      warehouses: plan.allocations.map((allocation) => ({
+        id: allocation.warehouseId,
+        name: warehouseNames.get(allocation.warehouseId) ?? 'Unknown warehouse',
+      })),
+      unfulfilled: plan.unfulfilled.map((pick) => ({ ...pick })),
+    };
+  }
+
+  /**
+   * Reads per-warehouse availability and runs the allocator.
+   *
+   * `reserved`, not `on_hand`, is what an outstanding order line may draw on.
+   * Checkout moved these units into `reserved` at placement, so what can go in
+   * this parcel is what THIS order is holding rather than everything on the
+   * shelf - allocating against on_hand would let one dispatch consume units
+   * another order had already reserved.
+   */
+  /**
+   * Every parcel one auto-dispatch request made.
+   *
+   * Matched on the `<requestKey>:<warehouseId>` prefix that `autoDispatch`
+   * mints. A LIKE on an escaped literal rather than a stored request id: the
+   * key is already unique per parcel and already indexed, and a second column
+   * would be a second thing that can disagree with the first.
+   */
+  private async shipmentsForRequest(
+    tx: Transaction,
+    orderId: string,
+    requestKey: string,
+  ): Promise<ShipmentView[]> {
+    const rows = await tx
+      .select()
+      .from(schema.shipments)
+      .where(
+        and(
+          eq(schema.shipments.orderId, orderId),
+          // Escaped, so a key containing % or _ cannot widen the match into
+          // another request's parcels.
+          sql`${schema.shipments.idempotencyKey} LIKE ${`${requestKey.replace(/([%_\\])/g, '\\$1')}:%`} ESCAPE '\\'`,
+        ),
+      )
+      .orderBy(asc(schema.shipments.shipmentNumber));
+
+    const views: ShipmentView[] = [];
+    for (const row of rows) {
+      const items = await tx
+        .select({
+          orderItemId: schema.shipmentItems.orderItemId,
+          quantity: schema.shipmentItems.quantity,
+        })
+        .from(schema.shipmentItems)
+        .where(eq(schema.shipmentItems.shipmentId, row.id));
+      views.push(toShipmentView(row, items));
+    }
+    return views;
+  }
+
+  /**
+   * The buildings a set of parcels left, named.
+   *
+   * Reads the ORIGINS OFF THE SHIPMENT ROWS rather than off `ShipmentView`,
+   * because that view deliberately does not carry one - it is the shape buyers
+   * read. Joining here keeps the origin on the seller's side of the fence.
+   */
+  private async warehousesOf(
+    tx: Transaction,
+    shipments: readonly ShipmentView[],
+  ): Promise<{ id: string; name: string }[]> {
+    const ids = shipments.map((parcel) => parcel.id);
+    if (ids.length === 0) return [];
+
+    const rows = await tx
+      .selectDistinct({ id: schema.warehouses.id, name: schema.warehouses.name })
+      .from(schema.shipments)
+      .innerJoin(schema.warehouses, eq(schema.warehouses.id, schema.shipments.warehouseId))
+      .where(inArray(schema.shipments.id, ids));
+    return rows;
+  }
+
+  /**
+   * Reads THIS ORDER'S recorded reservations and runs the allocator.
+   *
+   * `order_item_allocations`, not `inventory_items.reserved`. The reserved
+   * counter is a total with no link to an order, so allocating against it let
+   * one order's dispatch consume the units another had reserved - identical
+   * rows, no way to tell them apart, and the robbed order simply failed to ship
+   * later. Checkout records the split at reservation time; this reads it back.
+   *
+   * The allocator still runs rather than the rows being used directly, because
+   * the two are not the same question: the rows say what is held, and
+   * `allocateStock` decides how the OUTSTANDING units (which cancellations and
+   * earlier parcels have already reduced) map onto them, in a deterministic
+   * order.
+   */
+  private async planFor(
+    tx: Transaction,
+    order: LoadedOrder,
+    outstanding: readonly CancelPick[],
+  ): Promise<{ plan: AllocationPlan; warehouseNames: Map<string, string> }> {
+    const orderItemIds = outstanding.map((pick) => pick.orderItemId);
+
+    const warehouses = await tx
+      .select({
+        id: schema.warehouses.id,
+        name: schema.warehouses.name,
+        priority: schema.warehouses.priority,
+      })
+      .from(schema.warehouses)
+      .orderBy(asc(schema.warehouses.priority), asc(schema.warehouses.id));
+
+    const held =
+      orderItemIds.length === 0
+        ? []
+        : await tx
+            .select({
+              orderItemId: schema.orderItemAllocations.orderItemId,
+              warehouseId: schema.orderItemAllocations.warehouseId,
+              quantity: schema.orderItemAllocations.quantity,
+            })
+            .from(schema.orderItemAllocations)
+            .where(inArray(schema.orderItemAllocations.orderItemId, orderItemIds));
+
+    const stock: WarehouseStock[] = warehouses.map((warehouse) => {
+      const available = new Map<string, number>();
+      for (const row of held) {
+        if (row.warehouseId !== warehouse.id) continue;
+        if (row.quantity <= 0) continue;
+        available.set(row.orderItemId, row.quantity);
+      }
+      return { warehouseId: warehouse.id, priority: warehouse.priority, available };
+    });
+
+    return {
+      plan: allocateStock(
+        outstanding.map((pick) => ({ orderItemId: pick.orderItemId, quantity: pick.quantity })),
+        stock,
+      ),
+      warehouseNames: new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.name])),
+    };
+  }
+
+  /**
+   * Draws units off this order's holding at one warehouse.
+   *
+   * Conditional, with the quantity repeated in the WHERE, so two concurrent
+   * dispatches of the same line cannot both take the same units - the same
+   * shape as every other stock movement in this codebase, for the same reason.
+   */
+  private async consumeAllocation(
+    tx: Transaction,
+    orderItemId: string,
+    warehouseId: string,
+    quantity: number,
+  ): Promise<void> {
+    await tx
+      .update(schema.orderItemAllocations)
+      .set({ quantity: sql`${schema.orderItemAllocations.quantity} - ${quantity}` })
+      .where(
+        and(
+          eq(schema.orderItemAllocations.orderItemId, orderItemId),
+          eq(schema.orderItemAllocations.warehouseId, warehouseId),
+          sql`${schema.orderItemAllocations.quantity} >= ${quantity}`,
+        ),
+      );
   }
 
 
@@ -278,10 +638,24 @@ export class FulfilmentService {
       .set({ status: 'DELIVERED', deliveredAt: delivered, updatedAt: delivered })
       .where(eq(schema.shipments.id, shipmentId));
 
+    /**
+     * "NOT DELIVERED", not "== DISPATCHED".
+     *
+     * Phase 5 could write `status = 'DISPATCHED'` because those were the only
+     * two shipment states. Phase 6 added IN_TRANSIT and OUT_FOR_DELIVERY, and
+     * the old predicate would have counted a parcel on a van as *not* in
+     * transit - so delivering one parcel of two would have marked the whole
+     * order DELIVERED while the second was still moving.
+     *
+     * Written as the negative deliberately: the question is "is anything still
+     * out there", and a positive list has to be revisited every time the
+     * carrier vocabulary grows. This is the one place that vocabulary is
+     * load-bearing for order status.
+     */
     const inTransit = await tx
       .select({ id: schema.shipments.id })
       .from(schema.shipments)
-      .where(and(eq(schema.shipments.orderId, orderId), eq(schema.shipments.status, 'DISPATCHED')));
+      .where(and(eq(schema.shipments.orderId, orderId), ne(schema.shipments.status, 'DELIVERED')));
 
     const outstanding = outstandingOf(order).length;
     if (inTransit.length === 0 && outstanding === 0) {
@@ -566,7 +940,22 @@ export class FulfilmentService {
    * Both, or `available` moves and the buy box starts advertising stock that has
    * already been posted. Same both-halves guard as every other inventory write.
    */
-  private async dispatchStock(tx: Transaction, listingId: string, quantity: number): Promise<void> {
+  private async dispatchStock(
+    tx: Transaction,
+    listingId: string,
+    quantity: number,
+    warehouseId?: string,
+  ): Promise<void> {
+    /**
+     * The warehouse filter is folded into the SAME statement rather than
+     * checked first.
+     *
+     * A prior `SELECT ... WHERE warehouse_id = $1` followed by this UPDATE
+     * would be two snapshots, and the row could be drained between them - the
+     * exact shape of the bug Phase 4 fixed in the stock reservation. Passing
+     * NULL for "anywhere" keeps one query and one lock for both cases.
+     */
+    const scope = warehouseId ?? null;
     const updated = await tx.execute(sql`
       UPDATE inventory_items
          SET on_hand = on_hand - ${quantity},
@@ -574,7 +963,9 @@ export class FulfilmentService {
              updated_at = now()
        WHERE id = (
          SELECT id FROM inventory_items
-          WHERE listing_id = ${listingId} AND reserved >= ${quantity} AND on_hand >= ${quantity}
+          WHERE listing_id = ${listingId}
+            AND (${scope}::uuid IS NULL OR warehouse_id = ${scope}::uuid)
+            AND reserved >= ${quantity} AND on_hand >= ${quantity}
           ORDER BY reserved DESC
           LIMIT 1
           FOR UPDATE
@@ -583,7 +974,11 @@ export class FulfilmentService {
       RETURNING id
     `);
     if ((updated.rowCount ?? 0) === 0) {
-      throw new ConflictException('No reserved stock to dispatch for that listing');
+      throw new ConflictException(
+        warehouseId === undefined
+          ? 'No reserved stock to dispatch for that listing'
+          : 'That warehouse does not hold enough reserved stock for this line',
+      );
     }
   }
 
@@ -646,6 +1041,38 @@ export class FulfilmentService {
    * column, because a denormalised counter here would have two writers -
    * dispatch and cancellation - and drift under concurrency.
    */
+  /**
+   * A PENDING_PAYMENT order may be accepted only if it is cash on delivery.
+   *
+   * The state machine allows PENDING_PAYMENT -> ACCEPTED because shipping
+   * before the money arrives is what cash on delivery *means*, and order status
+   * describes fulfilment rather than payment. But that edge must not become a
+   * way to ship a card order nobody paid for, and `order-state.ts` knows
+   * nothing about payment methods and should not learn - so the method check
+   * lives here, where the intent is one join away.
+   *
+   * A prepaid order that has genuinely been paid is already PAID by the time it
+   * reaches a seller, because the webhook moved it. So the only orders this
+   * turns away are card orders whose payment never arrived, which is exactly
+   * the set that should be turned away.
+   */
+  private async assertPayableOrCod(tx: Transaction, order: LoadedOrder): Promise<void> {
+    if (order.status !== 'PENDING_PAYMENT') return;
+
+    const [intent] = await tx
+      .select({ provider: schema.paymentIntents.provider })
+      .from(schema.paymentIntents)
+      .where(eq(schema.paymentIntents.id, order.paymentIntentId))
+      .limit(1);
+
+    if (intent?.provider === 'cod') return;
+
+    throw new ConflictException({
+      code: 'PAYMENT_NOT_SETTLED',
+      message: 'This order has not been paid for yet. It cannot be accepted until it is.',
+    });
+  }
+
   private async load(tx: Transaction, orderId: string): Promise<LoadedOrder> {
     const rows = await tx
       .select({

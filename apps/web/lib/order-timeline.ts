@@ -42,8 +42,21 @@ export function describeEvent(event: OrderEvent, sellerName: string): string {
       return `${sellerName} could not fulfil this order`;
     case 'SHIPMENT_DISPATCHED':
       return carrierOf(event) === null ? 'Dispatched' : `Dispatched with ${carrierOf(event)}`;
+    /**
+     * Phase 6 carrier events. Written in the courier's voice rather than the
+     * seller's, because that is who observed them - the timeline already marks
+     * them SYSTEM, and the wording should not contradict the attribution.
+     */
+    case 'SHIPMENT_IN_TRANSIT':
+      return 'In transit';
+    case 'SHIPMENT_OUT_FOR_DELIVERY':
+      return 'Out for delivery';
     case 'SHIPMENT_DELIVERED':
       return 'Delivered';
+    case 'COD_COLLECTED':
+      return 'Cash collected';
+    case 'RETURN_PICKUP_SCHEDULED':
+      return 'Return collection booked';
     case 'LINES_CANCELLED':
       return 'Some items were cancelled';
     case 'CANCELLED':
@@ -59,7 +72,7 @@ export function toneForEvent(event: OrderEvent): Tone {
   if (event.type === 'REJECTED' || event.type === 'CANCELLED' || event.type === 'LINES_CANCELLED') {
     return 'warn';
   }
-  if (event.type === 'SHIPMENT_DELIVERED') return 'signal';
+  if (event.type === 'SHIPMENT_DELIVERED' || event.type === 'COD_COLLECTED') return 'signal';
   return 'neutral';
 }
 
@@ -73,6 +86,19 @@ export function toneForEvent(event: OrderEvent): Tone {
 export function detailForEvent(event: OrderEvent): string | null {
   const reason = stringField(event, REASON_KEY);
   if (reason !== null) return reason;
+
+  /**
+   * WHERE the carrier scanned it, for the events that carry one.
+   *
+   * "Arrived at the sorting hub · Tejgaon hub, Dhaka" is the line that makes a
+   * tracking timeline feel like tracking rather than a list of adjectives. It
+   * is checked before the tracking number because on those rows the number is
+   * already on the parcel card above.
+   */
+  const location = stringField(event, 'location');
+  const description = stringField(event, 'description');
+  if (location !== null && description !== null) return `${description} · ${location}`;
+  if (location !== null) return location;
 
   const tracking = stringField(event, 'trackingNumber');
   if (tracking !== null) return `Tracking ${tracking}`;
@@ -112,6 +138,10 @@ export function canCancel(status: OrderStatus): boolean {
 /** Status as a buyer reads it. Never the enum. */
 export function describeStatus(status: OrderStatus): { label: string; tone: Tone } {
   switch (status) {
+    case 'OUT_FOR_DELIVERY':
+      // Phase 6. Present tense, because it is happening now - which is the
+      // whole reason this state is worth having.
+      return { label: 'Out for delivery', tone: 'signal' };
     case 'PENDING_PAYMENT':
       return { label: 'Awaiting payment', tone: 'warn' };
     case 'PAID':

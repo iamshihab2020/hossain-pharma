@@ -7,7 +7,7 @@ Any verified seller lists anything. Buyers search across all of them, compare co
 
 ---
 
-## Status: Phases 0-5 complete, Phase 6 not started
+## Status: Phases 0-6 complete, Phase 7 not started
 
 **What runs today:** a monorepo, a database with tenant isolation proven under concurrent load at both the query layer and over HTTP, an idempotent seed, and three applications that build and start — plus the whole of identity and tenancy. Registration and login (argon2id), refresh-token rotation with reuse detection, Google OAuth, a capability matrix, a globally-registered auth guard and tenant interceptor, seller onboarding with document upload, and a cursor-paginated admin approval queue.
 
@@ -19,7 +19,29 @@ Phase 4 added commerce: a server-authoritative cart spanning many sellers with a
 
 Phase 5 added fulfilment: an order state machine whose status is COMPUTED from line coverage rather than set, seller accept/reject, **partial shipments** with carrier and tracking, per-parcel release of the seller's payable, buyer and seller cancellation with a ledger reversal, an append-only **order event log** behind the buyer's timeline, and printable packing slips and invoices. A seller's money now moves on **dispatch** rather than at capture, allocated per unit so two parcels sum exactly to what one capture would have paid.
 
-**What does not exist yet:** logistics and zones, reviews, returns. Those are Phases 6 through 8. `packages/api-client` is still not generated — there is an API surface worth generating from, and it has not fitted into a phase yet.
+Phase 6 added logistics: **delivery zones and pincode serviceability** (real Bangladeshi
+postcodes, and the gaps are deliberate so "no courier covers 5820 yet" is a branch you can
+see), **weight and dimensional rate cards** with chargeable weight as `max(actual,
+volumetric)`, **delivery slots** with capacity a second booking cannot oversell,
+**multi-warehouse allocation** that splits one order into two parcels from two buildings, a
+`ShippingProvider` port with a time-compressed mock carrier whose webhook walks a parcel
+through a full tracking timeline, **COD collection and reconciliation** clearing the
+`cod_receivable` account Phase 4 opened and never closed, and return-pickup scheduling.
+
+Three real bugs surfaced while building it, each fixed and each written down. Stock
+reservation required a SINGLE warehouse row to hold the whole quantity, so a seller with
+three units in Dhaka and three in Chattogram could not sell four while the catalogue
+advertised six. `inventory_items.reserved` recorded that units were spoken for but never by
+whom, so dispatching one order could consume another's reservation. And a **cash-on-delivery
+order could never be fulfilled at all** — it stayed `PENDING_PAYMENT` until the cash was
+collected, collection happens at the door, and the parcel only reaches the door if somebody
+ships it.
+
+**What does not exist yet:** reviews, returns, promotions. Those are Phases 7 through 9.
+`packages/api-client` is still hand-written rather than generated from OpenAPI — it is a
+shared contract of path plus schema that both the storefront and the API's own e2e suite
+import, so a shape change is a type error in one place, but generating it has not fitted
+into a phase yet.
 
 This section is kept accurate deliberately. A README that overstates what is built is the specific failure this project is a reaction to — see [`OVERVIEW.md`](./OVERVIEW.md), where all three of the previous READMEs described software that did not exist.
 
@@ -217,11 +239,11 @@ Each phase has acceptance criteria in PRD §11 and gets its own spec → plan �
 
 Phase 0 deferred two things deliberately. The `TenantInterceptor` (PRD §6.4 criterion 1) is now built and globally registered — that was Phase 1's headline deliverable. The ETL's load stage still cannot insert into tables Phase 4 has not created.
 
-Phase 4 leaves **one PRD item deliberately unbuilt**: the PRD names three payment adapters and two ship — `mock` and cash on delivery. A Stripe adapter built against an account that does not exist is code no test can exercise and a README claim nobody can check, which is the specific failure this repository reacts to. The port is the seam; adding it is one class and one line. Recorded in [ADR 0018](./docs/architecture/0018-payment-port-and-webhook-idempotency.md) as a deviation, not as done. Also deliberately thin, with the phase that owns them named: shipping is a flat rate and tax one rate per country (Phase 6), and cash on delivery accrues to `COD_RECEIVABLE` but is never collected (Phase 6).
+Phase 4 leaves **one PRD item deliberately unbuilt**: the PRD names three payment adapters and two ship — `mock` and cash on delivery. A Stripe adapter built against an account that does not exist is code no test can exercise and a README claim nobody can check, which is the specific failure this repository reacts to. The port is the seam; adding it is one class and one line. Recorded in [ADR 0018](./docs/architecture/0018-payment-port-and-webhook-idempotency.md) as a deviation, not as done. Also deliberately thin, with the phase that owns them named: shipping was a flat rate and tax one rate per country, and cash on delivery accrued to `COD_RECEIVABLE` and was never collected. **Phase 6 closed both shipping and COD**; tax is still one rate per country.
 
 Phase 3 leaves one criterion **open, not done**: PRD §11 asks for **p95 < 300 ms on 50k products**, and this repository does not prove that number. Every query shape's median at 50k documents is 7–120 ms and its best case 4–108 ms, but the harness — a Docker-hosted Postgres sharing a machine with the rest of the suite — delivers 400–1100 ms stalls to queries whose best case is single-digit milliseconds. The perf suite therefore asserts the best case per shape, separately asserts the GIN indexes are used, and reports the full distribution on every run. The strict p95 needs a staging environment with dedicated hardware. Also absent, and for stated reasons: **"frequently bought together"** and a **best-selling sort** need order history (Phase 4), and **saved-search alerts** need notifications (Phase 9) — the searches are saved, nothing emails anyone.
 
-Phase 2 leaves four things stated rather than hidden. **Landed price is flat, not zone-aware** — delivery zones are Phase 6, and the buy-box response carries `basis: "flat-shipping"` so nothing downstream can assume otherwise. **Seller rating is the second ranking key and is inert**, because there are no reviews until Phase 7; it is implemented and tested with synthetic values. **Bulk CSV import, tiered pricing and batch/lot expiry** are PRD §9.2 catalogue items deliberately deferred to Phase 10 or to Phase 6 warehousing. **`reserved` stock is written but never decremented** — reservation happens at checkout, in Phase 4; the column exists so `available = on_hand - reserved` is defined from the start rather than retrofitted.
+Phase 2 leaves four things stated rather than hidden. **Landed price is flat, not zone-aware**, and it stays that way even after Phase 6: the buy box ranks for a visitor who has not said where they are, so it has no address to quote against. The response carries `basis: "flat-shipping"` so nothing downstream can assume otherwise, and the product page's own delivery check is where a real zone rate appears. **Seller rating is the second ranking key and is inert**, because there are no reviews until Phase 7; it is implemented and tested with synthetic values. **Bulk CSV import, tiered pricing and batch/lot expiry** are PRD §9.2 catalogue items deliberately deferred to Phase 10 or to Phase 6 warehousing. **`reserved` stock is written but never decremented** — reservation happens at checkout, in Phase 4; the column exists so `available = on_hand - reserved` is defined from the start rather than retrofitted.
 
 Phase 1 leaves three things stated rather than hidden. **"A suspended seller can still fulfil open orders" is proven as a mechanism, not an outcome** — there are no orders until Phase 4, and the test name says so. **Document upload is mock KYC**, on a local-filesystem adapter behind a `FileStorage` port; PRD §4.2 lists real KYC as a non-goal. **Rate limiting is not implemented** — it belongs with the reverse proxy and Redis, and applying it to the auth routes alone would be half a solution.
 
