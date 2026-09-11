@@ -63,7 +63,7 @@ cp .env.example .env
 pnpm install
 docker compose up -d      # Postgres on 5433, Redis on 6380
 pnpm db:push              # migrations, including RLS policies and grants
-pnpm seed                 # 12 seller orgs, 5 users, 11 categories, 11 products, 26 listings
+pnpm seed                 # 12 seller orgs, 5 users, 11 categories, 12 products, 26 listings
 pnpm dev                  # api :4000 · web :3000 · worker
 ```
 

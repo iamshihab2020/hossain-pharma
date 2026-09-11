@@ -41,14 +41,46 @@ const PRODUCTS = [
     attributes: [{ key: 'size', text: 'One size' }] as AttributeValue[],
     variants: [{ sku: 'MER-TOTE-OS', name: 'One size', position: 0 }],
   },
+  /**
+   * TWO restricted products, with opposite jobs, and the split is load-bearing.
+   *
+   * `harbour-single-malt` is the one NOBODY LISTS. `catalogue.e2e` asserts that
+   * a variant with no offers renders an empty buy box rather than failing, and
+   * that assertion is only true while the product stays unoffered.
+   *
+   * `estuary-dry-gin` is the one the LISTING REVIEW PATH lists against.
+   * `listings.e2e` publishes a listing on it, has an admin approve it, and
+   * leaves it live on purpose - the last assertion in that test is that an
+   * approved listing reaches the public page.
+   *
+   * They were one product until the two tests started colliding: vitest runs
+   * files in PARALLEL against one database, so whether the catalogue saw an
+   * empty buy box depended on whether the listings file had got to the approval
+   * yet. Green, then red, then green, with nothing changed. It is the same rule
+   * CLAUDE.md already states for users and organisations - a test that MUTATES
+   * a shared fixture needs its own - applied to a product.
+   *
+   * If you add a third restricted fixture, say which of these two jobs it has.
+   */
   {
     slug: 'harbour-single-malt',
     name: 'Harbour Single Malt',
     brand: 'Harbour',
     category: 'spirits',
-    description: 'A restricted-category product, present so the age gate and the listing review path have a real row to act on.',
+    description:
+      'A restricted-category product that NOTHING LISTS, so the empty buy box has a page to render. Do not attach a listing to it.',
     attributes: [] as AttributeValue[],
     variants: [{ sku: 'HAR-SM-700', name: '700ml', position: 0 }],
+  },
+  {
+    slug: 'estuary-dry-gin',
+    name: 'Estuary Dry Gin',
+    brand: 'Estuary',
+    category: 'spirits',
+    description:
+      'A restricted-category product for the listing REVIEW path, which lists against it and leaves the listing live.',
+    attributes: [] as AttributeValue[],
+    variants: [{ sku: 'EST-GIN-700', name: '700ml', position: 0 }],
   },
 ] as const;
 

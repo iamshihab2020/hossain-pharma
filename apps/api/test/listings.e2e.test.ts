@@ -307,7 +307,7 @@ describe('seller listing management', () => {
 
 describe('restricted categories route through review', () => {
   it('sends a listing in a RESTRICTED category to PENDING_REVIEW, not ACTIVE', async () => {
-    const product = await app.inject({ method: 'GET', url: '/products/harbour-single-malt' });
+    const product = await app.inject({ method: 'GET', url: '/products/estuary-dry-gin' });
     const variant = product.json<{ variants: { id: string }[] }>().variants[0]?.id;
 
     const created = await req('POST', '/listings', karimAcme, {
@@ -331,7 +331,7 @@ describe('restricted categories route through review', () => {
     expect(published.json<Listing>().status).toBe('PENDING_REVIEW');
 
     // And it is NOT on the public page while it waits.
-    const page = await app.inject({ method: 'GET', url: '/products/harbour-single-malt' });
+    const page = await app.inject({ method: 'GET', url: '/products/estuary-dry-gin' });
     expect(page.json<{ variants: { buyBox: { offers: unknown[] } }[] }>().variants[0]?.buyBox.offers).toEqual(
       [],
     );
@@ -357,7 +357,7 @@ describe('restricted categories route through review', () => {
     });
     expect(approved.statusCode).toBe(201);
 
-    const live = await app.inject({ method: 'GET', url: '/products/harbour-single-malt' });
+    const live = await app.inject({ method: 'GET', url: '/products/estuary-dry-gin' });
     expect(
       live.json<{ variants: { buyBox: { winner: { listingId: string } | null } }[] }>().variants[0]
         ?.buyBox.winner?.listingId,

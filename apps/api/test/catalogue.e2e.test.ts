@@ -153,6 +153,16 @@ describe('the buyer catalogue', () => {
   });
 
   it('shows an empty buy box for a variant nobody offers, rather than failing', async () => {
+    /**
+     * `harbour-single-malt` specifically, because the seed reserves it for
+     * this: it is the restricted product NOTHING LISTS.
+     *
+     * The review path in `listings.e2e` has its own - `estuary-dry-gin` - and
+     * the two were one product until they started colliding. Vitest runs files
+     * in parallel against one database, so whether this saw an empty buy box
+     * depended on whether that file had reached its admin approval yet. Do not
+     * attach a listing to this slug, and do not point a mutating test at it.
+     */
     const product = (await get('/products/harbour-single-malt')).json<ProductBody>();
     const buyBox = product.variants[0]?.buyBox;
     expect(buyBox?.winner).toBeNull();

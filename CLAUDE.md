@@ -17,7 +17,7 @@ cp .env.example .env
 pnpm install
 docker compose up -d          # Postgres on 5433, Redis on 6380 (NOT the defaults)
 pnpm db:push                  # runs migrations; see "db:push is a lie" below
-pnpm seed                     # idempotent; 12 orgs, 5 users, 11 categories, 11 products, 26 listings
+pnpm seed                     # idempotent; 12 orgs, 5 users, 11 categories, 12 products, 26 listings
                               # (8 orgs + the acceptance fixtures, then the demo market in seed/demo.ts)
 pnpm dev                      # api :4000 · web :3000 · worker
 ```
@@ -47,6 +47,16 @@ pnpm --filter @nexmarket/db exec drizzle-kit generate --custom --name=my_migrati
 ```
 
 **Tests require Docker but no database configuration.** Every suite that touches a database starts its own via Testcontainers, including the API suite (whose `globalSetup` sets `DATABASE_URL` before any module reads it). The full suite passes with `DATABASE_URL`, `DATABASE_MIGRATION_URL` and `REDIS_URL` all unset — keep it that way.
+
+**`packages/db` caps itself at four concurrent forks, and that is a memory budget.**
+Nine of its files start their own Postgres, one fork per core would boot all nine at once,
+and this box has 8 GB with Docker already running. Unbounded, a full `pnpm test` dropped a
+file at random — a different one each time, all of them passing standalone — and once
+lost `ledger.ts` coverage in `packages/shared` to a partial V8 flush under the same
+pressure. The cap costs about five seconds when the package runs alone. **If you see a
+test fail in the suite and pass on its own, suspect the box before the code**, and check
+what else was holding containers.
+
 
 ## Architecture
 
@@ -341,9 +351,14 @@ projects on this machine bind 5432/6379. Container-internal ports are standard.
   fails, add the missing test rather than lowering the threshold. Twice now the honest
   fix has been to DELETE an unreachable branch rather than test it - a `?? 0` on a map
   key that cannot be missing is a safety net over solid ground.
-- **Never mutate seeded users or organisations in a test.** Granting
+- **Never mutate seeded users, organisations OR PRODUCTS in a test.** Granting
   `tanvir@acme.test` a role in one file changed what he could do in another, which passed
-  alone and failed in the suite. Register your own fixtures.
+  alone and failed in the suite. Register your own fixtures. Products bit later and the
+  same way: `catalogue.e2e` asserts an empty buy box on the restricted product while
+  `listings.e2e` published a listing against it and left it live, so which one won was
+  whichever file got there first. The seed now carries TWO restricted products with
+  opposite jobs - `harbour-single-malt` is never listed, `estuary-dry-gin` is what the
+  review path lists against - and both say so in their description.
 - **Tests are CO-LOCATED with their source**, everywhere except `apps/api/test/`,
   which holds the ones that boot the Nest app (`Test.createTestingModule`) and are
   named `*.e2e.test.ts`. The line is the application, not the database:

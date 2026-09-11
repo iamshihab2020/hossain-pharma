@@ -7,6 +7,22 @@ export default defineConfig({
     testTimeout: 180_000,
     hookTimeout: 180_000,
     pool: 'forks',
+
+    /**
+     * FOUR containers at a time, not nine.
+     *
+     * Nine of the files here start their own Postgres, and the default fork
+     * count is one per core - twelve on this machine, so every one of them
+     * booted at once. Memory is the binding constraint rather than CPU (8 GB
+     * with Docker running), and the suite began failing a file at random under
+     * a full `pnpm test` while passing every time on its own. A gate that
+     * depends on what else is running is a gate people re-run instead of read.
+     *
+     * Four is measured, not guessed: it keeps the wall-clock within a few
+     * seconds of unbounded when this package runs alone, and it is what stops
+     * the whole repo's test run from over-committing the box.
+     */
+    maxWorkers: 4,
     coverage: {
       provider: 'v8',
       // PRD section 13: 100 percent on RLS. client.ts is excluded because it is
