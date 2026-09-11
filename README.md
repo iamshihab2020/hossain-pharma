@@ -7,7 +7,7 @@ Any verified seller lists anything. Buyers search across all of them, compare co
 
 ---
 
-## Status: Phases 0-6 complete, Phase 7 in progress
+## Status: Phases 0-7 complete, Phase 8 not started
 
 **What runs today:** a monorepo, a database with tenant isolation proven under concurrent load at both the query layer and over HTTP, an idempotent seed, and three applications that build and start — plus the whole of identity and tenancy. Registration and login (argon2id), refresh-token rotation with reuse detection, Google OAuth, a capability matrix, a globally-registered auth guard and tenant interceptor, seller onboarding with document upload, and a cursor-paginated admin approval queue.
 

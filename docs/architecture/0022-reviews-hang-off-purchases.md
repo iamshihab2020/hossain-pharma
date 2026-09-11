@@ -155,13 +155,73 @@ two mechanisms, on purpose: a person withdrawing their own words should leave
 nothing behind, while a moderator taking somebody else's down is an act that has
 to stay auditable and reversible — and Phase 11's audit log will want the row.
 
-## 6. What this does not do
+## 6. The rest of Phase 7, and the decisions each one needed
+
+Everything below was added after the spine above, and each came with one
+decision worth recording.
+
+**Photos cascade from the review and are moderated with it.** A photo has no
+meaning apart from the sentence it illustrates, so it is never listed or served
+on its own — which means a REMOVED review makes its photos unreachable with
+nothing extra to remember. `GET /reviews/media/:id` refuses a photo whose review
+is removed, and that refusal is the point: it is the one surface nothing lists,
+so a takedown that missed it would leave the pictures fetchable by anyone
+holding an id and nobody would notice.
+
+**Helpful votes get no denormalised counter, and that is the contrast with
+ratings.** The pair (review, user) is the primary key, so voting is idempotent
+by construction and un-voting is a `DELETE`. A rating is denormalised because
+the BUY BOX ranks on it in a query over the whole catalogue that cannot afford
+to reach into reviews; a helpful count is only ever shown on a page that has
+already fetched the twenty reviews it belongs to. **Denormalise where the read
+cannot afford the join, not everywhere the number appears.** Helpful only, with
+no "unhelpful": a downvote on a marketplace review is a button for the seller
+who disliked it, and the signal is indistinguishable from a genuinely poor
+review.
+
+**Asking a question needs no purchase, and that is why Q&A is a separate table
+and a separate service.** A review is a verdict on something you received; a
+question is what you ask BEFORE buying, so requiring an order would leave it
+askable only by the people who no longer need to ask. Q&A therefore has no
+verification to lean on and leans on moderation instead — same status enum, same
+queue, same rule that a report flags rather than hides.
+
+`answers.seller_org_id` is **nullable, and never inferred at read time**. On a
+marketplace where several sellers list one product, "the seller replied" is
+ambiguous until you say which, and a buyer weighing two offers wants to know
+whether the answer came from the one they are considering. A boolean
+`is_seller` would lose exactly that. It is verified against `org_members` when
+written, because a header that promoted an answer to "the seller says" without a
+membership check would make the badge worth nothing.
+
+**Auto-flagging flags and can never hide or refuse.** PRD §9.6 asks for
+profanity and velocity; a twenty-word list is wrong often enough that letting it
+BLOCK would turn a moderation aid into a censorship bug with a scheduler, and an
+honest buyer would be told their review was unacceptable by a regex. So a
+flagged review is written, visible, and counted, with the reasons stored on the
+row — `flag_reasons` is an array because the rules are independent and the
+COMBINATION is the signal: a link alone is usually a mistake, a link plus a
+flagged word plus the author's fourth review this hour is not. `RESTORE` clears
+the array as well as the status, so a cleared review is distinguishable from one
+nobody has reached yet.
+
+What the word list is **not** is a profanity filter. Real ones are a service,
+they are localised, and they lose to `f u c k`. The value here is that the seam
+exists and is tested, so replacing it is one file.
+
+**A suspended seller's storefront is a 404, not a page saying so.** A suspension
+is an enforcement action, not a status page for the public, and their listings
+are already invisible through `public_active_offers` — so the page would be an
+empty shell with an explanation nobody is owed. Fulfilment stats and policies
+are deliberately absent: dispatch performance is Phase 10's analytics work,
+which has the order history to compute it honestly, and policies need a console
+screen for a seller to write them.
+
+## 7. What this still does not do
 
 | Not here | Why |
 |---|---|
-| Review photos | The `StorageProvider` port exists and product media already uses it. Photos are additive to this shape and need no decision from it. |
-| Helpful voting | A second table keyed by (review, user). Additive; nothing above changes. |
-| Product Q&A | Its own pair of tables. Shares the platform-owned reasoning and none of the purchase-verification machinery — a question is not a purchase. |
-| Seller storefront pages | `seller_ratings` is the data they need and it exists now. The page is a route, not a decision. |
-| Auto-flagging | Deliberately last. Rules that move content need the moderation queue to exist first, and the queue is what tells you which rules would have been right. |
-| Seeded review data | PRD §4.3 S5 wants 300 reviews, which needs 200 seeded ORDERS first — reviews hang off order lines and the seed creates none. That is S5's piece of work, not this one. |
+| Image checks on review photos | PRD §9.6 lists it beside profanity and velocity. It needs a model or a service, and unlike the word list there is no honest twenty-line version — a stub here would claim something false. The seam is `autoFlagReasons`, which takes text today and can take a verdict later. |
+| Seeded review data | PRD §4.3 S5 wants 300 reviews, which needs 200 seeded ORDERS first — reviews hang off order lines and the seed creates none. That is S5's piece of work. |
+| Q&A on the seller console | A seller answers from the product page, acting as their organisation. A console inbox of unanswered questions is a Phase 10 tooling screen. |
+| Review editing in the UI | The API takes it and the contract carries it; no screen calls it yet. A buyer who wants to change a review can delete and rewrite, which is one request more and zero screens more. |

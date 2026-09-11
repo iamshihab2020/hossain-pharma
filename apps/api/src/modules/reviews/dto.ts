@@ -61,6 +61,55 @@ export const reportReviewSchema = z.object({
 });
 export type ReportReviewInput = z.infer<typeof reportReviewSchema>;
 
+/**
+ * A question, which needs no purchase and therefore no order line.
+ *
+ * The product is named DIRECTLY here, unlike a review - there is nothing to
+ * derive it from, because the whole point is that the asker has not bought it.
+ * That is the one place the two features diverge in their input and it is worth
+ * seeing side by side.
+ */
+export const askSchema = z.object({
+  productId: z.string().uuid(),
+  body: z.string().trim().min(5).max(1_000),
+});
+export type AskInput = z.infer<typeof askSchema>;
+
+export const answerSchema = z.object({
+  body: z.string().trim().min(1).max(2_000),
+});
+export type AnswerInput = z.infer<typeof answerSchema>;
+
+/**
+ * A photo, as base64 - the same shape product media already uses.
+ *
+ * Not multipart. Fastify would need a separate parser registered for one route,
+ * and the sizes here are a phone photo rather than a video; base64 costs a
+ * third more bytes and saves a dependency and a second code path for reading a
+ * body. Product media made this call in Phase 2 and there is no reason for
+ * review photos to disagree with it.
+ *
+ * The content types are an allowlist rather than a check on the filename: a
+ * `.png` that is really an HTML document is the oldest upload trick there is.
+ */
+export const reviewPhotoSchema = z.object({
+  contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  contentBase64: z.string().min(1).max(8_000_000),
+});
+export type ReviewPhotoInput = z.infer<typeof reviewPhotoSchema>;
+
+export function parseAsk(body: unknown): AskInput {
+  return parse(askSchema, body);
+}
+
+export function parseAnswer(body: unknown): AnswerInput {
+  return parse(answerSchema, body);
+}
+
+export function parseReviewPhoto(body: unknown): ReviewPhotoInput {
+  return parse(reviewPhotoSchema, body);
+}
+
 export function parseCreateReview(body: unknown): CreateReviewInput {
   return parse(createReviewSchema, body);
 }

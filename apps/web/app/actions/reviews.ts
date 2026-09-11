@@ -7,6 +7,9 @@ import { ApiError, apiCall } from '@/lib/api/server';
 import { parseReviewForm } from '@/lib/review-form';
 
 export type ReviewResult = { ok: true } | { ok: false; message: string };
+export type HelpfulResult =
+  | { ok: true; helpfulCount: number; voted: boolean }
+  | { ok: false; message: string };
 
 /**
  * Writing a review, from the buyer's own order.
@@ -24,13 +27,15 @@ export type ReviewResult = { ok: true } | { ok: false; message: string };
 export async function writeReview(
   orderItemId: string,
   form: FormData,
+  photos: readonly { contentType: string; base64: string }[] = [],
 ): Promise<ReviewResult> {
   const parsed = parseReviewForm(form);
   if (!parsed.ok) return { ok: false, message: parsed.error };
   const { rating, title, body } = parsed.value;
 
+  let reviewId: string;
   try {
-    await apiCall(endpoints.myReviews(), {
+    const { data } = await apiCall(endpoints.myReviews(), {
       method: 'POST',
       auth: true,
       body: {
@@ -40,8 +45,27 @@ export async function writeReview(
         ...(body === '' ? {} : { body }),
       },
     });
+    reviewId = data.id;
   } catch (error) {
     return { ok: false, message: messageFor(error) };
+  }
+
+  /**
+   * PHOTOS AFTER THE REVIEW, because a photo needs a review to hang off.
+   *
+   * SEQUENTIALLY, not in parallel: the API assigns each photo the next position
+   * by counting the ones already stored, so four concurrent uploads would all
+   * read zero and land on top of each other. One at a time is four round trips
+   * for the rare review that has four photos, and correct ordering for all of
+   * them.
+   *
+   * A failure here does NOT fail the review. The words are the valuable part
+   * and they are already saved; telling somebody their review did not post
+   * because the third picture timed out would be a lie about what happened.
+   */
+  for (const photo of photos) {
+    const attached = await attachPhoto(reviewId, photo.contentType, photo.base64);
+    if (!attached.ok) break;
   }
 
   /**
@@ -108,6 +132,58 @@ export async function deleteReview(id: string): Promise<ReviewResult> {
 }
 
 /**
+ * "I found this helpful", and pressing it again takes it back.
+ *
+ * Returns the SERVER's count rather than letting the component increment.
+ * Somebody else may have voted since the page rendered, and a number that
+ * disagrees with the next reload is worse than one that arrives a moment later.
+ *
+ * No revalidation. The count lives in one component on a page that is otherwise
+ * cached catalogue content, and blowing the product page's cache for a vote
+ * would make every reader re-render the whole comparison table to move a number
+ * only the voter is looking at.
+ */
+export async function markHelpful(id: string): Promise<HelpfulResult> {
+  try {
+    const { data } = await apiCall(endpoints.helpfulReview(id), {
+      method: 'POST',
+      auth: true,
+      body: {},
+    });
+    return { ok: true, helpfulCount: data.helpfulCount, voted: data.voted };
+  } catch (error) {
+    return { ok: false, message: messageFor(error) };
+  }
+}
+
+/**
+ * A photo on a review the buyer just wrote.
+ *
+ * Base64 over JSON, the same shape product media uses: Fastify would need a
+ * multipart parser registered for one route, and a phone photo does not need
+ * streaming. Read in the browser rather than here, because a Server Action
+ * receiving a `File` would buffer it twice.
+ */
+export async function attachPhoto(
+  reviewId: string,
+  contentType: string,
+  contentBase64: string,
+): Promise<ReviewResult> {
+  try {
+    await apiCall(endpoints.addReviewPhoto(reviewId), {
+      method: 'POST',
+      auth: true,
+      body: { contentType, contentBase64 },
+    });
+  } catch (error) {
+    return { ok: false, message: messageFor(error) };
+  }
+
+  updateTag('catalogue');
+  return { ok: true };
+}
+
+/**
  * Reporting somebody else's review.
  *
  * No auth, matching the endpoint: requiring an account to report abuse means
@@ -135,8 +211,12 @@ export async function reportReview(id: string, productSlug: string): Promise<Rev
  */
 function messageFor(error: unknown): string {
   if (!(error instanceof ApiError)) throw error;
-  if (error.status === 409) return 'You have already reviewed this purchase.';
+  /* 409 covers two different things now - a second review of one purchase, and
+     an author trying to boost their own. The API's own message says which, and
+     `ApiError` keeps it on `message`. */
+  if (error.status === 409) return error.message;
   if (error.status === 404) return 'This order has not arrived yet, so it cannot be reviewed.';
-  if (error.status === 401) return 'Sign in to write a review.';
+  if (error.status === 401) return 'Sign in first.';
+  if (error.status === 403) return 'Sign in first.';
   return 'That did not go through. Try again.';
 }

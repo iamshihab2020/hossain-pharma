@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useTransition, type ReactNode } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import type { PublicBuyBox, PublicOffer } from '@nexmarket/api-client';
@@ -125,7 +126,19 @@ export function OfferTable({
             {/* Naming the seller on the buy button is not decoration. On a
                 marketplace, "Add to cart" without a seller name is a trap. */}
             <p className="truncate text-sm text-muted-foreground">
-              Sold by {selected.seller.displayName} · {formatDispatch(selected.dispatchDays)}
+              {/* The seller's name is a LINK now that they have a page. Phase 7
+                  gave them a storefront with their rating on it, and "who am I
+                  buying from" is the question a shopper asks at exactly this
+                  point - standing over the Add button, having just been told a
+                  name they may not recognise. */}
+              Sold by{' '}
+              <Link
+                href={`/s/${selected.seller.slug}`}
+                className="text-foreground underline-offset-2 hover:underline"
+              >
+                {selected.seller.displayName}
+              </Link>{' '}
+              · {formatDispatch(selected.dispatchDays)}
             </p>
           </div>
           <Button onClick={submit} disabled={pending} size="lg" className="shrink-0">

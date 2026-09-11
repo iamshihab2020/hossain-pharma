@@ -5,6 +5,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -104,6 +105,20 @@ export const reviews = pgTable(
 
     status: reviewStatus('status').notNull().default('PUBLISHED'),
 
+    /**
+     * WHY it was flagged - 'profanity', 'links', 'velocity', 'reported'.
+     *
+     * A queue whose entries say only "flagged" teaches the next moderator
+     * nothing and trains them to skim. An array rather than one reason because
+     * the rules are independent and the COMBINATION is the signal: a link alone
+     * is usually a mistake, while a link plus a flagged word plus the author's
+     * fourth review this hour is not.
+     *
+     * Empty while PUBLISHED, and cleared on RESTORE - a review a human has
+     * cleared should not carry the accusation that brought it in.
+     */
+    flagReasons: text('flag_reasons').array().notNull().default(sql`ARRAY[]::text[]`),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -171,3 +186,142 @@ export const sellerRatings = pgTable('seller_ratings', {
   count5: integer('count_5').notNull().default(0),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Photos attached to a review. PRD 11 Phase 7, "reviews with photos".
+ *
+ * CASCADE FROM THE REVIEW and nothing else. A photo has no meaning apart from
+ * the review it illustrates - it is not a gallery item, it is evidence for a
+ * sentence - so it is never listed, searched or served on its own, and when the
+ * author deletes their review the pictures go with it.
+ *
+ * That is also what makes moderation cheap: a REMOVED review stops being read,
+ * so its photos stop being reachable, with no second thing to remember. The
+ * alternative - moderating photos independently - would need its own status,
+ * its own queue and its own way of going wrong.
+ *
+ * `storageKey` is opaque, per the FileStorage port: nothing outside an adapter
+ * may parse, join or interpret it.
+ */
+export const reviewMedia = pgTable(
+  'review_media',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    reviewId: uuid('review_id')
+      .notNull()
+      .references(() => reviews.id, { onDelete: 'cascade' }),
+    storageKey: text('storage_key').notNull(),
+    contentType: text('content_type').notNull(),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('review_media_review_idx').on(t.reviewId, t.position)],
+);
+
+/**
+ * "Was this helpful?" - PRD 9.5's helpful voting.
+ *
+ * ONE ROW PER PERSON PER REVIEW, with the pair as the primary key. Voting is
+ * therefore idempotent by construction and un-voting is a DELETE; there is no
+ * counter to get out of step and no "did they already vote" lookup that two
+ * concurrent clicks could both pass.
+ *
+ * NO DENORMALISED `helpful_count`, and the contrast with `product_ratings` is
+ * the point. A rating is denormalised because the BUY BOX ranks on it, in a
+ * query over the whole catalogue that cannot afford to reach into reviews. A
+ * helpful count is only ever shown on a page that has already fetched the
+ * twenty reviews it belongs to, so a grouped count costs one join and owes
+ * nobody a drift test. Denormalise where the read cannot afford the join, not
+ * everywhere the number appears.
+ *
+ * Helpful only, with no "unhelpful". A downvote on a marketplace review is a
+ * button for the seller who disliked it, and the signal it produces cannot be
+ * told apart from the signal a genuinely poor review produces.
+ */
+export const reviewVotes = pgTable(
+  'review_votes',
+  {
+    reviewId: uuid('review_id')
+      .notNull()
+      .references(() => reviews.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.reviewId, t.userId] }),
+    index('review_votes_review_idx').on(t.reviewId),
+  ],
+);
+
+/**
+ * Product Q&A. PRD 9.5's "Q&A section", and 9.2's seller staff who "answer
+ * product questions".
+ *
+ * ASKING NEEDS NO PURCHASE, and that is the decision that separates this table
+ * from `reviews` entirely. A review is a verdict on something you received, so
+ * it hangs off an order line and cannot exist without one. A question is what
+ * you ask BEFORE buying - "does it come with the charger?" - so requiring a
+ * purchase would leave it askable only by the people who no longer need to ask.
+ *
+ * The consequence is that Q&A has no verification to lean on and therefore
+ * leans on moderation instead: same `review_status`, same queue, same rule that
+ * a report flags rather than hides.
+ *
+ * Platform-owned with no RLS, like everything else in this file: the Q&A
+ * section is on the product page, read by somebody with no session.
+ */
+export const questions = pgTable(
+  'questions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    authorUserId: uuid('author_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    status: reviewStatus('status').notNull().default('PUBLISHED'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('questions_product_idx').on(t.productId, t.status)],
+);
+
+/**
+ * An answer, from anybody - and marked when it comes from a seller.
+ *
+ * `seller_org_id` IS NULLABLE AND IT IS THE WHOLE POINT of this table's shape.
+ * On a marketplace where several sellers list one product, "the seller replied"
+ * is ambiguous until you say WHICH, and a buyer weighing two offers wants to
+ * know whether the answer came from the one they are considering. A boolean
+ * `is_seller` would lose exactly that.
+ *
+ * Null means another shopper answered, which is most of the useful traffic in
+ * any real Q&A section and is not a lesser kind of answer.
+ */
+export const answers = pgTable(
+  'answers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    questionId: uuid('question_id')
+      .notNull()
+      .references(() => questions.id, { onDelete: 'cascade' }),
+    authorUserId: uuid('author_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The organisation the answerer was acting for, when they were acting for
+     *  one. Never inferred at read time: membership changes, and an answer must
+     *  keep saying who gave it. */
+    sellerOrgId: uuid('seller_org_id').references(() => organisations.id, {
+      onDelete: 'set null',
+    }),
+    body: text('body').notNull(),
+    status: reviewStatus('status').notNull().default('PUBLISHED'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('answers_question_idx').on(t.questionId, t.status)],
+);

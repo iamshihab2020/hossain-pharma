@@ -10,6 +10,7 @@ import {
   type OrderView,
   type ProductPage,
   type ProductSummary,
+  type Question,
   type RatingSummary,
   type Review,
   type DeliverySlot,
@@ -118,6 +119,16 @@ export async function getProductReviews(productId: string): Promise<Review[]> {
     auth: false,
     revalidate: CATALOGUE_TTL,
     tags: ['catalogue', `rating:${productId}`],
+  });
+  return items;
+}
+
+/** A product's Q&A. Cached with the catalogue, like the reviews beside it. */
+export async function getProductQuestions(productId: string): Promise<Question[]> {
+  const { items } = await apiGet(endpoints.productQuestions(productId), {
+    auth: false,
+    revalidate: CATALOGUE_TTL,
+    tags: ['catalogue', `qa:${productId}`],
   });
   return items;
 }

@@ -8,3 +8,4 @@ export * from './fulfilment.js';
 export * from './logistics.js';
 export * from './allocation.js';
 export * from './reviews.js';
+export * from './moderation.js';

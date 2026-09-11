@@ -752,16 +752,68 @@ export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
 export const reviewSchema = z.object({
   id: z.string(),
   productId: z.string(),
+  /** `productId` routes nowhere - the product page is `/p/[slug]`. */
+  productSlug: z.string(),
   rating: z.number().int().min(1).max(5),
   title: z.string(),
   body: z.string(),
   authorName: z.string(),
   sellerName: z.string(),
   status: reviewStatusSchema,
+  /** Why a human is being asked to look - 'links', 'profanity', 'reported'.
+   *  Empty unless FLAGGED, and cleared again when a moderator restores it. */
+  flagReasons: z.array(z.string()),
+  /** How many people found it useful. Counted rather than denormalised: the
+   *  page that shows it has already fetched the reviews it belongs to. */
+  helpfulCount: z.number().int(),
+  /** Photo ids in order. The bytes come from `endpoints.reviewPhoto(id)`,
+   *  which 404s once the review is removed. */
+  photoIds: z.array(z.string()),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Review = z.infer<typeof reviewSchema>;
+
+export const helpfulOutcomeSchema = z.object({
+  helpfulCount: z.number().int(),
+  voted: z.boolean(),
+});
+export type HelpfulOutcome = z.infer<typeof helpfulOutcomeSchema>;
+
+export const reviewPhotoSchema = z.object({ id: z.string() });
+
+// ---- product Q&A ------------------------------------------------------------
+
+/**
+ * An answer, with the seller named when one gave it.
+ *
+ * `sellerName` is NULLABLE and that is the shape's whole point: on a
+ * marketplace where several sellers list one product, "the seller replied" is
+ * ambiguous until you say which. Null means another shopper answered, which is
+ * most of the useful traffic in any real Q&A section.
+ */
+export const answerSchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  authorName: z.string(),
+  sellerName: z.string().nullable(),
+  status: reviewStatusSchema,
+  createdAt: z.string(),
+});
+export type Answer = z.infer<typeof answerSchema>;
+
+export const questionSchema = z.object({
+  id: z.string(),
+  productId: z.string(),
+  body: z.string(),
+  authorName: z.string(),
+  status: reviewStatusSchema,
+  createdAt: z.string(),
+  answers: z.array(answerSchema),
+});
+export type Question = z.infer<typeof questionSchema>;
+export const questionsResponse = z.object({ items: z.array(questionSchema) });
+
 export const reviewsResponse = z.object({ items: z.array(reviewSchema) });
 
 /**
@@ -783,6 +835,39 @@ export const ratingSummarySchema = z.object({
   ),
 });
 export type RatingSummary = z.infer<typeof ratingSummarySchema>;
+
+// ---- seller storefronts -----------------------------------------------------
+
+export const storefrontOfferSchema = z.object({
+  listingId: z.string(),
+  productSlug: z.string(),
+  productName: z.string(),
+  variantName: z.string(),
+  price: moneySchema,
+  availableStock: z.number().int(),
+});
+export type StorefrontOffer = z.infer<typeof storefrontOfferSchema>;
+
+/**
+ * A seller's own page. PRD 9.5.
+ *
+ * No fulfilment stats and no policies: dispatch performance is Phase 10's
+ * analytics work, which has the order history to compute it honestly, and
+ * policies need a console screen for a seller to write them. A number invented
+ * here from the columns to hand would be a worse version of something a later
+ * phase owns.
+ */
+export const storefrontSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  displayName: z.string(),
+  countryCode: z.string(),
+  memberSince: z.string(),
+  rating: ratingSummarySchema,
+  listingCount: z.number().int(),
+  offers: z.array(storefrontOfferSchema),
+});
+export type Storefront = z.infer<typeof storefrontSchema>;
 
 /** A delivered line the signed-in buyer has not reviewed yet. */
 export const reviewablePurchaseSchema = z.object({

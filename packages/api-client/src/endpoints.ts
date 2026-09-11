@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import {
   addressSchema,
   addressesResponse,
@@ -18,6 +18,11 @@ import {
   reviewsResponse,
   reviewablePurchasesResponse,
   reportOutcomeSchema,
+  helpfulOutcomeSchema,
+  reviewPhotoSchema,
+  questionSchema,
+  questionsResponse,
+  storefrontSchema,
   deliverySlotsResponse,
   warehousesResponse,
   warehouseSchema,
@@ -152,11 +157,50 @@ export const endpoints = {
   reportReview: (id: string) =>
     endpoint(`/reviews/${encodeURIComponent(id)}/report`, reportOutcomeSchema),
 
+  /**
+   * A review photo's bytes. NOT a JSON endpoint - the response is an image, so
+   * nothing here parses it; the path exists so a page can build a `src` without
+   * hardcoding the shape, and the schema is a formality this one never uses.
+   */
+  reviewPhoto: (id: string) =>
+    endpoint(`/reviews/media/${encodeURIComponent(id)}`, reviewPhotoSchema),
+
+  /** A product's Q&A. Public, like the reviews beside it - a question is what
+   *  somebody asks BEFORE buying, so a login would serve it to the wrong half. */
+  productQuestions: (productId: string) =>
+    endpoint(`/products/${encodeURIComponent(productId)}/questions`, questionsResponse),
+
+  ask: () => endpoint('/questions', questionSchema),
+  answerQuestion: (id: string) =>
+    endpoint(`/questions/${encodeURIComponent(id)}/answers`, questionSchema),
+  question: (id: string) => endpoint(`/questions/${encodeURIComponent(id)}`, questionSchema),
+
+  /** A seller's storefront, by slug. Public: deciding whether to trust a seller
+   *  happens before signing in, or not at all. */
+  storefront: (slug: string) =>
+    endpoint(`/sellers/${encodeURIComponent(slug)}`, storefrontSchema),
+
+  // ---- moderation (platform admin) -------------------------------------------
+  moderationQueue: () => endpoint('/admin/reviews', reviewsResponse),
+  moderateReview: (id: string) =>
+    endpoint(`/admin/reviews/${encodeURIComponent(id)}/moderate`, reviewSchema),
+  questionQueue: () => endpoint('/admin/questions', questionsResponse),
+  moderateQuestion: (id: string) =>
+    endpoint(
+      `/admin/questions/${encodeURIComponent(id)}/moderate`,
+      z.object({ id: z.string(), status: z.string() }),
+    ),
+
   // ---- the buyer's own reviews ----------------------------------------------
   myReviews: () => endpoint('/me/reviews', reviewSchema),
   myReview: (id: string) => endpoint(`/me/reviews/${encodeURIComponent(id)}`, reviewSchema),
   reviewablePurchases: () =>
     endpoint('/me/reviews/pending', reviewablePurchasesResponse),
+  /** Press once to mark helpful, again to take it back. */
+  helpfulReview: (id: string) =>
+    endpoint(`/me/reviews/${encodeURIComponent(id)}/helpful`, helpfulOutcomeSchema),
+  addReviewPhoto: (id: string) =>
+    endpoint(`/me/reviews/${encodeURIComponent(id)}/photos`, reviewPhotoSchema),
 
   /**
    * Serviceability by postcode, for the product page's delivery check.

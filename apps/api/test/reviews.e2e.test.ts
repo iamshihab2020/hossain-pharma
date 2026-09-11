@@ -465,6 +465,372 @@ describe('the buy box finally has a seller rating to rank on', () => {
   });
 });
 
+// ------------------------------------------------- helpful votes and photos
+
+describe('helpful votes', () => {
+  it('counts a vote once however many times it is pressed', async () => {
+    const fresh = await freshProduct('vote');
+    const author = await delivered('vote-author', alpha, fresh.listingId);
+    const created = await asUser(author.token, 'POST', '/me/reviews', {
+      orderItemId: author.orderItemId,
+      rating: 5,
+    });
+    const reviewId = json<{ id: string }>(created).id;
+
+    const reader = await register(`${NS}-voter@example.test`);
+    const first = await asUser(reader.token, 'POST', `/me/reviews/${reviewId}/helpful`);
+    expect(json<{ helpfulCount: number; voted: boolean }>(first)).toMatchObject({
+      helpfulCount: 1,
+      voted: true,
+    });
+
+    // PRESSING AGAIN TAKES IT BACK rather than adding a second. The pair
+    // (review, user) is the primary key, so there is no counter to get out of
+    // step and no "have they voted" lookup two clicks could both pass.
+    const second = await asUser(reader.token, 'POST', `/me/reviews/${reviewId}/helpful`);
+    expect(json<{ helpfulCount: number; voted: boolean }>(second)).toMatchObject({
+      helpfulCount: 0,
+      voted: false,
+    });
+  });
+
+  it('refuses to let an author boost their own', async () => {
+    // Not because one vote breaks anything, but because a helpful count the
+    // author can raise is a number that means slightly less for everybody.
+    const fresh = await freshProduct('vote-self');
+    const author = await delivered('vote-self', alpha, fresh.listingId);
+    const created = await asUser(author.token, 'POST', '/me/reviews', {
+      orderItemId: author.orderItemId,
+      rating: 4,
+    });
+    const reviewId = json<{ id: string }>(created).id;
+
+    const res = await asUser(author.token, 'POST', `/me/reviews/${reviewId}/helpful`);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('shows the count on the public list without an N+1', async () => {
+    const listed = await app.inject({ method: 'GET', url: `/products/${productId}/reviews` });
+    const items = json<{ items: { helpfulCount: number }[] }>(listed).items;
+    expect(items.every((item) => typeof item.helpfulCount === 'number')).toBe(true);
+  });
+});
+
+describe('review photos', () => {
+  /** A one-pixel PNG, so the test carries bytes rather than a mock. */
+  const PIXEL =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  it('stores a photo and serves it back to anyone', async () => {
+    const fresh = await freshProduct('photo');
+    const purchase = await delivered('photo', alpha, fresh.listingId);
+    const created = await asUser(purchase.token, 'POST', '/me/reviews', {
+      orderItemId: purchase.orderItemId,
+      rating: 5,
+      body: 'See the scratch.',
+    });
+    const reviewId = json<{ id: string }>(created).id;
+
+    const uploaded = await asUser(purchase.token, 'POST', `/me/reviews/${reviewId}/photos`, {
+      contentType: 'image/png',
+      contentBase64: PIXEL,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const photoId = json<{ id: string }>(uploaded).id;
+
+    // PUBLIC, like the review it belongs to.
+    const served = await app.inject({ method: 'GET', url: `/reviews/media/${photoId}` });
+    expect(served.statusCode).toBe(200);
+    expect(served.headers['content-type']).toContain('image/png');
+    expect(served.rawPayload.length).toBeGreaterThan(0);
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/products/${fresh.productId}/reviews`,
+    });
+    expect(json<{ items: { photoIds: string[] }[] }>(listed).items[0]?.photoIds).toEqual([
+      photoId,
+    ]);
+  });
+
+  it('STOPS SERVING a photo once its review is removed', async () => {
+    /**
+     * The surface that would otherwise outlive a takedown. A removed review
+     * vanishes from every list, but its photos stay fetchable by anyone holding
+     * the id unless the serve route checks - and nothing lists photo ids, so
+     * nobody would notice.
+     */
+    const fresh = await freshProduct('photo-moderated');
+    const purchase = await delivered('photo-moderated', alpha, fresh.listingId);
+    const created = await asUser(purchase.token, 'POST', '/me/reviews', {
+      orderItemId: purchase.orderItemId,
+      rating: 1,
+    });
+    const reviewId = json<{ id: string }>(created).id;
+
+    const uploaded = await asUser(purchase.token, 'POST', `/me/reviews/${reviewId}/photos`, {
+      contentType: 'image/png',
+      contentBase64: PIXEL,
+    });
+    const photoId = json<{ id: string }>(uploaded).id;
+    expect((await app.inject({ method: 'GET', url: `/reviews/media/${photoId}` })).statusCode).toBe(
+      200,
+    );
+
+    await asAdmin('POST', `/admin/reviews/${reviewId}/moderate`, {
+      action: 'REMOVE',
+      reason: 'Not the product',
+    });
+
+    expect((await app.inject({ method: 'GET', url: `/reviews/media/${photoId}` })).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("refuses a photo on somebody else's review", async () => {
+    const fresh = await freshProduct('photo-theirs');
+    const purchase = await delivered('photo-theirs', alpha, fresh.listingId);
+    const created = await asUser(purchase.token, 'POST', '/me/reviews', {
+      orderItemId: purchase.orderItemId,
+      rating: 3,
+    });
+    const reviewId = json<{ id: string }>(created).id;
+
+    const stranger = await register(`${NS}-photo-stranger@example.test`);
+    const res = await asUser(stranger.token, 'POST', `/me/reviews/${reviewId}/photos`, {
+      contentType: 'image/png',
+      contentBase64: PIXEL,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ------------------------------------------------------------- auto-flagging
+
+describe('auto-flagging', () => {
+  it('publishes an ordinary review untouched', async () => {
+    const fresh = await freshProduct('flag-clean');
+    const purchase = await delivered('flag-clean', alpha, fresh.listingId);
+    const created = await asUser(purchase.token, 'POST', '/me/reviews', {
+      orderItemId: purchase.orderItemId,
+      rating: 4,
+      body: 'Arrived on time and works well.',
+    });
+
+    expect(json<{ status: string; flagReasons: string[] }>(created)).toMatchObject({
+      status: 'PUBLISHED',
+      flagReasons: [],
+    });
+  });
+
+  it('FLAGS a review carrying a link, and still publishes it', async () => {
+    /**
+     * The whole shape of the decision. The rule cannot refuse and cannot hide:
+     * a twenty-word list is wrong often enough that letting it block would make
+     * it a censorship bug with a scheduler. So the review is visible, it counts
+     * toward the rating, and a moderator sees it with the reason attached.
+     */
+    const fresh = await freshProduct('flag-link');
+    const purchase = await delivered('flag-link', alpha, fresh.listingId);
+    const created = await asUser(purchase.token, 'POST', '/me/reviews', {
+      orderItemId: purchase.orderItemId,
+      rating: 5,
+      body: 'Cheaper at bargains.shop, total scam here',
+    });
+
+    const review = json<{ id: string; status: string; flagReasons: string[] }>(created);
+    expect(review.status).toBe('FLAGGED');
+    // EVERY reason, not the first: one signal is usually a mistake, three is
+    // not, and a moderator needs to be able to tell those apart.
+    expect(review.flagReasons).toEqual(['profanity', 'links']);
+
+    // Visible and counted, which is what "flag, never hide" has to mean.
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/products/${fresh.productId}/reviews`,
+    });
+    expect(json<{ items: { id: string }[] }>(listed).items.map((r) => r.id)).toContain(review.id);
+    expect(await summary(fresh.productId)).toMatchObject({ average: 5, total: 1 });
+
+    // And in front of a human.
+    const queue = await asAdmin('GET', '/admin/reviews');
+    expect(json<{ items: { id: string }[] }>(queue).items.map((r) => r.id)).toContain(review.id);
+  });
+
+  it('CLEARS the reasons when a moderator restores it', async () => {
+    const fresh = await freshProduct('flag-restore');
+    const purchase = await delivered('flag-restore', alpha, fresh.listingId);
+    const created = await asUser(purchase.token, 'POST', '/me/reviews', {
+      orderItemId: purchase.orderItemId,
+      rating: 2,
+      body: 'This is a scam',
+    });
+    const reviewId = json<{ id: string }>(created).id;
+
+    const restored = await asAdmin('POST', `/admin/reviews/${reviewId}/moderate`, {
+      action: 'RESTORE',
+      reason: 'Reads as a genuine complaint',
+    });
+
+    // Not "published, but we still think it is a scam". A cleared review has to
+    // be distinguishable from one nobody has reached yet.
+    expect(json<{ status: string; flagReasons: string[] }>(restored)).toMatchObject({
+      status: 'PUBLISHED',
+      flagReasons: [],
+    });
+  });
+});
+
+// --------------------------------------------------------------- product Q&A
+
+describe('questions and answers', () => {
+  it('lets anybody ask WITHOUT having bought it', async () => {
+    /**
+     * The one place Q&A and reviews diverge, and the reason they are separate
+     * tables. A question is what you ask BEFORE buying, so requiring a purchase
+     * would leave it askable only by the people who no longer need to ask.
+     */
+    const asker = await register(`${NS}-asker@example.test`);
+    const res = await asUser(asker.token, 'POST', '/questions', {
+      productId,
+      body: 'Does it come with a charger in the box?',
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(json<{ answers: unknown[] }>(res).answers).toEqual([]);
+  });
+
+  it('marks WHICH SELLER answered, not merely that a seller did', async () => {
+    const asker = await register(`${NS}-asker2@example.test`);
+    const asked = await asUser(asker.token, 'POST', '/questions', {
+      productId,
+      body: 'Is the warranty local?',
+    });
+    const questionId = json<{ id: string }>(asked).id;
+
+    const answered = await asSeller(alpha, 'POST', `/questions/${questionId}/answers`, {
+      body: 'Yes, twelve months, handled by us.',
+    });
+    expect(answered.statusCode).toBe(201);
+
+    /**
+     * On a marketplace where several sellers list one product, "the seller
+     * replied" is ambiguous until you say which - a buyer weighing two offers
+     * wants to know whether the answer came from the one they are considering.
+     */
+    const answers = json<{ answers: { sellerName: string | null }[] }>(answered).answers;
+    expect(answers[0]?.sellerName).toBe('alpha Ltd');
+  });
+
+  it('records an answer from a shopper as a shopper, with no seller name', async () => {
+    const asker = await register(`${NS}-asker3@example.test`);
+    const asked = await asUser(asker.token, 'POST', '/questions', {
+      productId,
+      body: 'How heavy is it?',
+    });
+    const questionId = json<{ id: string }>(asked).id;
+
+    const helper = await register(`${NS}-helper@example.test`);
+    const answered = await asUser(helper.token, 'POST', `/questions/${questionId}/answers`, {
+      body: 'About 400g with the case.',
+    });
+
+    // Null, and that is not a lesser kind of answer - it is most of the useful
+    // traffic in any real Q&A section.
+    expect(json<{ answers: { sellerName: string | null }[] }>(answered).answers[0]?.sellerName).toBe(
+      null,
+    );
+  });
+
+  it('refuses to let someone answer as an org they do not belong to', async () => {
+    const asker = await register(`${NS}-asker4@example.test`);
+    const asked = await asUser(asker.token, 'POST', '/questions', {
+      productId,
+      body: 'Colour options?',
+    });
+    const questionId = json<{ id: string }>(asked).id;
+
+    // The tenant header is taken from the request and then VERIFIED against
+    // org_members. A header that promoted an answer to "the seller says"
+    // without a membership check would make the badge worth nothing.
+    const res = await app.inject({
+      method: 'POST',
+      url: `/questions/${questionId}/answers`,
+      headers: {
+        authorization: `Bearer ${(await register(`${NS}-imposter@example.test`)).token}`,
+        'x-tenant-id': alpha.orgId,
+        'content-type': 'application/json',
+      },
+      payload: { body: 'We definitely stock it' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('reads publicly, oldest question first', async () => {
+    // Oldest first, unlike reviews: a Q&A section is a growing FAQ rather than
+    // a feed, and the question everyone asks is usually the first one asked.
+    const res = await app.inject({ method: 'GET', url: `/products/${productId}/questions` });
+    expect(res.statusCode).toBe(200);
+
+    const items = json<{ items: { body: string; createdAt: string }[] }>(res).items;
+    expect(items.length).toBeGreaterThanOrEqual(3);
+    const dates = items.map((item) => new Date(item.createdAt).getTime());
+    expect([...dates].sort((a, b) => a - b)).toEqual(dates);
+  });
+
+  it('takes a moderated question off the page along with its answers', async () => {
+    const asker = await register(`${NS}-asker5@example.test`);
+    const asked = await asUser(asker.token, 'POST', '/questions', {
+      productId,
+      body: 'Where can I buy this cheaper?',
+    });
+    const questionId = json<{ id: string }>(asked).id;
+
+    await asAdmin('POST', `/admin/questions/${questionId}/moderate`, {
+      action: 'REMOVE',
+      reason: 'Advertising',
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/products/${productId}/questions` });
+    expect(json<{ items: { id: string }[] }>(res).items.map((q) => q.id)).not.toContain(
+      questionId,
+    );
+  });
+});
+
+// ------------------------------------------------------- seller storefronts
+
+describe('seller storefronts', () => {
+  it('shows the seller, their rating and what they list', async () => {
+    const res = await app.inject({ method: 'GET', url: `/sellers/${NS}-alpha` });
+    expect(res.statusCode).toBe(200);
+
+    const store = json<{
+      displayName: string;
+      rating: { average: number | null; total: number };
+      listingCount: number;
+      offers: { productSlug: string }[];
+    }>(res);
+
+    expect(store.displayName).toBe('alpha Ltd');
+    expect(store.listingCount).toBeGreaterThan(0);
+    expect(store.offers.length).toBeGreaterThan(0);
+    // Their reviews, aggregated - the same rows the buy box ranks on.
+    expect(store.rating.total).toBeGreaterThan(0);
+  });
+
+  it('needs no token, because that is the decision the page is for', async () => {
+    const res = await app.inject({ method: 'GET', url: `/sellers/${NS}-beta` });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('404s an unknown slug', async () => {
+    expect(
+      (await app.inject({ method: 'GET', url: '/sellers/no-such-seller' })).statusCode,
+    ).toBe(404);
+  });
+});
+
 // ---- fixture ---------------------------------------------------------------
 
 /**

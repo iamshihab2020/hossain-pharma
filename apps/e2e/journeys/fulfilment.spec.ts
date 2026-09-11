@@ -213,4 +213,62 @@ test('a seller ships part of an order and the buyer watches it move', async ({
   await expect(reviews.getByText(new RegExp(`bought from ${SELLER_NAME}`, 'i'))).toBeVisible();
 
   await expectNoSeriousA11yViolations(page, 'product page with reviews');
+
+  // --- another shopper marks it helpful and asks a question ----------------
+  //
+  // A DIFFERENT PERSON, because the two things this checks are both rules about
+  // who you are: an author cannot vote on their own review, and asking needs no
+  // purchase. The buyer above could not demonstrate either.
+  const passerby = await registerBuyer(page, 'e2e-passerby');
+
+  await page.goto('/search?q=redmi');
+  await page.getByRole('link', { name: /redmi/i }).first().click();
+
+  const asRead = page.getByRole('region', { name: /what buyers said/i });
+  await asRead.getByRole('button', { name: /^Helpful$/ }).click();
+  await expect(asRead.getByRole('button', { name: /1 found this helpful/ })).toBeVisible();
+
+  /**
+   * ASKING WITHOUT HAVING BOUGHT IT, which is the whole difference between Q&A
+   * and reviews. `passerby` has an account and no orders at all; the review
+   * form on `/reviews` would offer them nothing, and this form takes their
+   * question anyway.
+   */
+  const qa = page.getByRole('region', { name: /questions about this product/i });
+  await qa.getByLabel(/ask a question/i).fill('Does it ship with a charger in the box?');
+  await qa.getByRole('button', { name: /post question/i }).click();
+  await expect(qa.getByText(/does it ship with a charger/i)).toBeVisible();
+
+  await expectNoSeriousA11yViolations(page, 'product page with Q&A');
+
+  // --- the seller answers, and is named as the seller ----------------------
+  await page.context().clearCookies();
+  await signIn(page, SELLER);
+  await page.goto('/search?q=redmi');
+  await page.getByRole('link', { name: /redmi/i }).first().click();
+
+  const sellerQa = page.getByRole('region', { name: /questions about this product/i });
+  await sellerQa.getByRole('button', { name: /answer this/i }).click();
+  await sellerQa.getByLabel(/your answer/i).fill('Yes, a 33W charger is included.');
+  await sellerQa.getByRole('button', { name: /post answer/i }).click();
+
+  await expect(sellerQa.getByText(/33W charger is included/)).toBeVisible();
+  // WHICH seller, not merely that a seller replied - several sellers list this
+  // product and a buyer wants to know whether it came from the one they are
+  // considering.
+  await expect(sellerQa.getByText(SELLER_NAME).first()).toBeVisible();
+  await expect(sellerQa.getByText('· seller')).toBeVisible();
+
+  // --- the storefront the rating now feeds --------------------------------
+  await page.context().clearCookies();
+  await page.goto('/s/bengal-tech');
+  await expect(page.getByRole('heading', { name: SELLER_NAME })).toBeVisible();
+  // The same review, counted against the seller as well as the product.
+  await expect(page.getByText('1 review')).toBeVisible();
+  await expect(page.getByText('4.0 out of 5')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /what they sell/i })).toBeVisible();
+
+  await expectNoSeriousA11yViolations(page, 'seller storefront');
+
+  expect(passerby.email).toContain('e2e-passerby');
 });

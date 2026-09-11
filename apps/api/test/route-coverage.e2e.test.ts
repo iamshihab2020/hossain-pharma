@@ -64,11 +64,31 @@ const registered: { method: string; url: string }[] = [];
  *   buy, which is the one moment it exists for. `reviews`, `product_ratings`
  *   and `seller_ratings` are platform-owned with no RLS for exactly this
  *   reader; both routes already filter REMOVED, so moderation binds here too.
+ * `/products/:productId/questions` - the other half of the same page. A Q&A
+ *   section answers the question somebody has BEFORE buying, so putting it
+ *   behind a login serves it only to the people who no longer need it. Filters
+ *   REMOVED on both questions and answers.
+ * `/sellers/:slug` - a storefront is where a shopper arrives from a product
+ *   page to decide whether they trust the seller, which is a decision made
+ *   before signing in or not at all. It exposes nothing a product page does
+ *   not: the name, the rating, and ACTIVE listings, which reach it through the
+ *   `public_active_offers` policy rather than through a filter this handler
+ *   writes. A seller who is not ACTIVE is a 404 rather than a page saying so -
+ *   a suspension is an enforcement action, not a status page for the public.
+ * `/reviews/media/:id` - the bytes behind a review photo. Served through the
+ *   app rather than from a URL the client builds, because `storageKey` is
+ *   opaque by the FileStorage port's contract AND because moderation has to
+ *   bind here: the handler refuses a photo whose review is REMOVED, which is
+ *   the one surface that would otherwise outlive a takedown. The id is the only
+ *   caller-supplied value and it selects exactly one row.
  */
 const PUBLIC_READS: ReadonlySet<string> = new Set([
   'GET /health',
   'GET /products/:productId/reviews',
   'GET /products/:productId/reviews/summary',
+  'GET /products/:productId/questions',
+  'GET /sellers/:slug',
+  'GET /reviews/media/:id',
   'GET /cart',
   'GET /auth/google',
   'GET /auth/google/callback',

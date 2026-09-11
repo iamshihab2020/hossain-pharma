@@ -1,13 +1,16 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { and, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { type Transaction, schema, withTenant } from '@nexmarket/db';
 import {
+  autoFlagReasons,
   averageRating,
   distribution,
   emptyHistogram,
+  REVIEW_VELOCITY_WINDOW_MS,
   totalReviews,
   type RatingHistogram,
 } from '@nexmarket/shared';
+import { FILE_STORAGE, type FileStorage } from '../../common/storage/file-storage.port.js';
 import { translateDbErrors } from '../../common/db-errors.js';
 import { getRequestContext } from '../../common/request-context.js';
 import { ReviewAggregateService } from './review-aggregate.service.js';
@@ -16,12 +19,23 @@ import type { CreateReviewInput, ModerateReviewInput, UpdateReviewInput } from '
 export type ReviewView = {
   id: string;
   productId: string;
+  /** The product's slug, because `productId` routes nowhere: the product page
+   *  is `/p/[slug]`. The moderation queue is the only reader that needs it and
+   *  it is one join rather than a lookup per row. */
+  productSlug: string;
   rating: number;
   title: string;
   body: string;
   authorName: string;
   sellerName: string;
   status: 'PUBLISHED' | 'FLAGGED' | 'REMOVED';
+  /** Why a human is being asked to look. Empty unless FLAGGED. */
+  flagReasons: string[];
+  /** How many people found it useful. COUNTED, not denormalised - see the
+   *  `review_votes` table comment for why this one does not get a column. */
+  helpfulCount: number;
+  /** Photo ids, in order. The bytes come from `GET /reviews/media/:id`. */
+  photoIds: string[];
   createdAt: Date;
   updatedAt: Date;
 };
@@ -62,7 +76,10 @@ export type ReviewablePurchase = {
  */
 @Injectable()
 export class ReviewsService {
-  constructor(private readonly aggregates: ReviewAggregateService) {}
+  constructor(
+    private readonly aggregates: ReviewAggregateService,
+    @Inject(FILE_STORAGE) private readonly files: FileStorage,
+  ) {}
 
   // ---- public reads --------------------------------------------------------
 
@@ -81,10 +98,12 @@ export class ReviewsService {
         review: schema.reviews,
         authorName: schema.users.displayName,
         sellerName: schema.organisations.displayName,
+        productSlug: schema.products.slug,
       })
       .from(schema.reviews)
       .innerJoin(schema.users, eq(schema.users.id, schema.reviews.authorUserId))
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.reviews.sellerOrgId))
+      .innerJoin(schema.products, eq(schema.products.id, schema.reviews.productId))
       .where(
         and(
           eq(schema.reviews.productId, productId),
@@ -94,7 +113,7 @@ export class ReviewsService {
         .orderBy(desc(schema.reviews.createdAt))
         .limit(limit);
 
-      return rows.map((row) => toView(row.review, row.authorName, row.sellerName));
+      return this.decorate(tx, rows);
     });
   }
 
@@ -239,29 +258,49 @@ export class ReviewsService {
       );
     }
 
+    /**
+     * AUTO-FLAGGING RUNS AT WRITE TIME, and it never refuses.
+     *
+     * PRD 9.6 asks for profanity and suspicious review velocity. Every rule can
+     * only put a review in FRONT OF A HUMAN: a twenty-word list is wrong often
+     * enough that letting it block would turn a moderation aid into a
+     * censorship bug with a scheduler, and an honest buyer would be told their
+     * review was unacceptable by a regex.
+     *
+     * So the review is written, it is visible, it counts toward the rating, and
+     * a moderator finds it in the queue with the reasons attached.
+     */
+    const reasons = autoFlagReasons({
+      title: input.title ?? '',
+      body: input.body ?? '',
+      recentByAuthor: await this.recentByAuthor(ctx.tx, ctx.userId),
+    });
+
     return translateDbErrors(
       (async () => {
-      const [row] = await ctx.tx
-        .insert(schema.reviews)
-        .values({
-          orderItemId: input.orderItemId,
-          productId: purchase.productId,
-          sellerOrgId: purchase.sellerOrgId,
-          authorUserId: ctx.userId,
-          rating: input.rating,
-          title: input.title ?? '',
-          body: input.body ?? '',
-        })
-        .onConflictDoNothing()
-        .returning();
+        const [row] = await ctx.tx
+          .insert(schema.reviews)
+          .values({
+            orderItemId: input.orderItemId,
+            productId: purchase.productId,
+            sellerOrgId: purchase.sellerOrgId,
+            authorUserId: ctx.userId,
+            rating: input.rating,
+            title: input.title ?? '',
+            body: input.body ?? '',
+            status: reasons.length > 0 ? 'FLAGGED' : 'PUBLISHED',
+            flagReasons: reasons,
+          })
+          .onConflictDoNothing()
+          .returning();
 
-      // `DO NOTHING` then a check, rather than letting the constraint throw.
-      // `ledger_entries` established the shape: the revoke on UPDATE makes
-      // `DO UPDATE` unavailable repo-wide, and a row count is a clearer answer
-      // than catching a driver error by code.
-      if (row === undefined) {
-        throw new ConflictException('You have already reviewed this purchase');
-      }
+        // `DO NOTHING` then a check, rather than letting the constraint throw.
+        // `ledger_entries` established the shape: the revoke on UPDATE makes
+        // `DO UPDATE` unavailable repo-wide, and a row count is a clearer
+        // answer than catching a driver error by code.
+        if (row === undefined) {
+          throw new ConflictException('You have already reviewed this purchase');
+        }
 
         await this.aggregates.refreshFor(ctx.tx, purchase.productId, purchase.sellerOrgId);
         return this.one(ctx.tx, row.id);
@@ -330,9 +369,20 @@ export class ReviewsService {
     const status =
       input.action === 'REMOVE' ? 'REMOVED' : input.action === 'FLAG' ? 'FLAGGED' : 'PUBLISHED';
 
+    /**
+     * RESTORE clears the accusation, not just the status.
+     *
+     * A review a human has looked at and cleared should not go on carrying the
+     * reasons that brought it in - otherwise it reads as "published, but we
+     * still think it is a scam", and the next moderator scanning a list has no
+     * way to tell a cleared review from one nobody has reached yet.
+     */
+    const flagReasons =
+      input.action === 'RESTORE' ? [] : [...new Set([...existing.flagReasons, 'moderator'])];
+
     await tx
       .update(schema.reviews)
-      .set({ status, updatedAt: new Date() })
+      .set({ status, flagReasons, updatedAt: new Date() })
       .where(eq(schema.reviews.id, id));
 
     await this.aggregates.refreshFor(tx, existing.productId, existing.sellerOrgId);
@@ -352,7 +402,13 @@ export class ReviewsService {
     return this.public(async (tx) => {
       const result = await tx
         .update(schema.reviews)
-        .set({ status: 'FLAGGED', updatedAt: new Date() })
+        .set({
+          status: 'FLAGGED',
+          // APPENDED, not replaced. A human report on something the rules
+          // already caught is more reason to look, not a different one.
+          flagReasons: sql`ARRAY(SELECT DISTINCT unnest(${schema.reviews.flagReasons} || ARRAY['reported']))`,
+          updatedAt: new Date(),
+        })
         .where(and(eq(schema.reviews.id, id), eq(schema.reviews.status, 'PUBLISHED')))
         .returning({ id: schema.reviews.id });
 
@@ -368,18 +424,141 @@ export class ReviewsService {
         review: schema.reviews,
         authorName: schema.users.displayName,
         sellerName: schema.organisations.displayName,
+        productSlug: schema.products.slug,
       })
       .from(schema.reviews)
       .innerJoin(schema.users, eq(schema.users.id, schema.reviews.authorUserId))
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.reviews.sellerOrgId))
+      .innerJoin(schema.products, eq(schema.products.id, schema.reviews.productId))
       .where(eq(schema.reviews.status, 'FLAGGED'))
       .orderBy(desc(schema.reviews.updatedAt))
       .limit(limit);
 
-    return rows.map((row) => toView(row.review, row.authorName, row.sellerName));
+    return this.decorate(tx, rows);
   }
 
   // ---- internals ------------------------------------------------------------
+
+  // ---- helpful votes --------------------------------------------------------
+
+  /**
+   * "I found this helpful", and pressing it again takes it back.
+   *
+   * IDEMPOTENT BY PRIMARY KEY. The pair (review, user) is the key, so a second
+   * click cannot double-count and there is no "have they voted already" lookup
+   * that two concurrent clicks could both pass. `ON CONFLICT DO NOTHING` then a
+   * row count, which is the shape every other idempotent write here uses.
+   *
+   * You cannot vote on your own. Not because it would break anything - it is
+   * one vote - but because a helpful count an author can raise is a number that
+   * means slightly less for everybody, and the rule is cheap.
+   */
+  async vote(reviewId: string): Promise<{ helpfulCount: number; voted: boolean }> {
+    const ctx = this.user();
+
+    const [review] = await ctx.tx
+      .select({ authorUserId: schema.reviews.authorUserId })
+      .from(schema.reviews)
+      .where(eq(schema.reviews.id, reviewId))
+      .limit(1);
+    if (review === undefined) throw new NotFoundException('No such review');
+    if (review.authorUserId === ctx.userId) {
+      throw new ConflictException('You cannot mark your own review helpful');
+    }
+
+    const inserted = await ctx.tx
+      .insert(schema.reviewVotes)
+      .values({ reviewId, userId: ctx.userId })
+      .onConflictDoNothing()
+      .returning({ reviewId: schema.reviewVotes.reviewId });
+
+    // Already voted, so this press is the buyer taking it back.
+    if (inserted.length === 0) {
+      await ctx.tx
+        .delete(schema.reviewVotes)
+        .where(
+          and(
+            eq(schema.reviewVotes.reviewId, reviewId),
+            eq(schema.reviewVotes.userId, ctx.userId),
+          ),
+        );
+    }
+
+    return {
+      helpfulCount: await this.helpfulCount(ctx.tx, reviewId),
+      voted: inserted.length > 0,
+    };
+  }
+
+  // ---- photos ---------------------------------------------------------------
+
+  /**
+   * A photo on your own review. PRD 11 Phase 7, "reviews with photos".
+   *
+   * Through the `FileStorage` port, so the bytes land wherever the adapter puts
+   * them and nothing here knows whether that is a disk or a bucket. The
+   * `tenantId` the port wants is the SELLER's: a review photo is evidence about
+   * one seller's goods, and if these ever move to per-tenant buckets that is
+   * the bucket it belongs in.
+   */
+  async addPhoto(
+    reviewId: string,
+    input: { contentType: string; bytes: Buffer },
+  ): Promise<{ id: string }> {
+    const ctx = this.user();
+    const review = await this.own(ctx.tx, reviewId, ctx.userId);
+
+    const existing = await ctx.tx
+      .select({ n: count() })
+      .from(schema.reviewMedia)
+      .where(eq(schema.reviewMedia.reviewId, reviewId));
+    const position = existing[0]?.n ?? 0;
+    if (position >= MAX_PHOTOS) {
+      throw new ConflictException('A review may carry at most four photos');
+    }
+
+    const { storageKey } = await this.files.put(input.bytes, {
+      tenantId: review.sellerOrgId,
+      contentType: input.contentType,
+    });
+
+    const [row] = await ctx.tx
+      .insert(schema.reviewMedia)
+      .values({ reviewId, storageKey, contentType: input.contentType, position })
+      .returning({ id: schema.reviewMedia.id });
+    if (row === undefined) throw new ConflictException('Photo could not be stored');
+
+    return { id: row.id };
+  }
+
+  /**
+   * The bytes behind a photo id, for the public serve route.
+   *
+   * REFUSES A PHOTO ON A REMOVED REVIEW. Without this the pictures outlive
+   * moderation: the review vanishes from every list while its photos stay
+   * fetchable by anyone holding the id, which is "removes content from all
+   * surfaces" quietly failing on the one surface nothing lists.
+   */
+  async photo(mediaId: string): Promise<{ bytes: Buffer; contentType: string }> {
+    return this.public(async (tx) => {
+      const [row] = await tx
+        .select({
+          storageKey: schema.reviewMedia.storageKey,
+          contentType: schema.reviewMedia.contentType,
+          status: schema.reviews.status,
+        })
+        .from(schema.reviewMedia)
+        .innerJoin(schema.reviews, eq(schema.reviews.id, schema.reviewMedia.reviewId))
+        .where(eq(schema.reviewMedia.id, mediaId))
+        .limit(1);
+
+      if (row === undefined || row.status === 'REMOVED') {
+        throw new NotFoundException('No such photo');
+      }
+
+      return { bytes: await this.files.get(row.storageKey), contentType: row.contentType };
+    });
+  }
 
   /**
    * A transaction for the @Public() routes, which have none of their own.
@@ -404,15 +583,19 @@ export class ReviewsService {
         review: schema.reviews,
         authorName: schema.users.displayName,
         sellerName: schema.organisations.displayName,
+        productSlug: schema.products.slug,
       })
       .from(schema.reviews)
       .innerJoin(schema.users, eq(schema.users.id, schema.reviews.authorUserId))
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.reviews.sellerOrgId))
+      .innerJoin(schema.products, eq(schema.products.id, schema.reviews.productId))
       .where(eq(schema.reviews.id, id))
       .limit(1);
 
     if (row === undefined) throw new NotFoundException('No such review');
-    return toView(row.review, row.authorName, row.sellerName);
+    const [view] = await this.decorate(tx, [row]);
+    if (view === undefined) throw new NotFoundException('No such review');
+    return view;
   }
 
   /** Yours, or a 404. Never a 403 - saying "forbidden" confirms it exists. */
@@ -432,6 +615,78 @@ export class ReviewsService {
     return row;
   }
 
+  /**
+   * Attaches votes and photos to a page of reviews, in TWO QUERIES.
+   *
+   * Not one per review. Twenty reviews would be forty extra round trips, which
+   * is the N+1 this codebase keeps finding - and it would land on the product
+   * page, the one surface whose whole argument for server rendering is that it
+   * arrives in the first response.
+   */
+  private async decorate(
+    tx: Transaction,
+    rows: {
+      review: typeof schema.reviews.$inferSelect;
+      authorName: string;
+      sellerName: string;
+      productSlug: string;
+    }[],
+  ): Promise<ReviewView[]> {
+    if (rows.length === 0) return [];
+    const ids = rows.map((row) => row.review.id);
+
+    const [votes, photos] = await Promise.all([
+      tx
+        .select({ reviewId: schema.reviewVotes.reviewId, n: count() })
+        .from(schema.reviewVotes)
+        .where(inArray(schema.reviewVotes.reviewId, ids))
+        .groupBy(schema.reviewVotes.reviewId),
+      tx
+        .select({ id: schema.reviewMedia.id, reviewId: schema.reviewMedia.reviewId })
+        .from(schema.reviewMedia)
+        .where(inArray(schema.reviewMedia.reviewId, ids))
+        .orderBy(schema.reviewMedia.position),
+    ]);
+
+    const voteCounts = new Map(votes.map((row) => [row.reviewId, row.n]));
+    const photoIds = new Map<string, string[]>();
+    for (const photo of photos) {
+      photoIds.set(photo.reviewId, [...(photoIds.get(photo.reviewId) ?? []), photo.id]);
+    }
+
+    return rows.map((row) =>
+      toView(row.review, row.authorName, row.sellerName, {
+        productSlug: row.productSlug,
+        helpfulCount: voteCounts.get(row.review.id) ?? 0,
+        photoIds: photoIds.get(row.review.id) ?? [],
+      }),
+    );
+  }
+
+  private async helpfulCount(tx: Transaction, reviewId: string): Promise<number> {
+    const [row] = await tx
+      .select({ n: count() })
+      .from(schema.reviewVotes)
+      .where(eq(schema.reviewVotes.reviewId, reviewId));
+    return row?.n ?? 0;
+  }
+
+  /**
+   * The author's other reviews inside the velocity window.
+   *
+   * Timestamps rather than a count, because `exceedsReviewVelocity` takes them
+   * - a helper accepting a number could be handed a lifetime total by mistake
+   * and read it as a burst.
+   */
+  private async recentByAuthor(tx: Transaction, userId: string): Promise<Date[]> {
+    const since = new Date(Date.now() - REVIEW_VELOCITY_WINDOW_MS);
+    const rows = await tx
+      .select({ createdAt: schema.reviews.createdAt })
+      .from(schema.reviews)
+      .where(and(eq(schema.reviews.authorUserId, userId), gte(schema.reviews.createdAt, since)));
+    return rows.map((row) => row.createdAt);
+  }
+
   private user(): { tx: Transaction; userId: string } {
     const ctx = getRequestContext();
     if (ctx.userId === null) throw new NotFoundException('No such review');
@@ -439,20 +694,29 @@ export class ReviewsService {
   }
 }
 
+/** How many photos one review may carry. Enough to show a fault from two
+ *  angles; not an album. */
+const MAX_PHOTOS = 4;
+
 function toView(
   row: typeof schema.reviews.$inferSelect,
   authorName: string,
   sellerName: string,
+  extras: { productSlug: string; helpfulCount: number; photoIds: string[] },
 ): ReviewView {
   return {
     id: row.id,
     productId: row.productId,
+    productSlug: extras.productSlug,
     rating: row.rating,
     title: row.title,
     body: row.body,
     authorName,
     sellerName,
     status: row.status,
+    flagReasons: row.flagReasons,
+    helpfulCount: extras.helpfulCount,
+    photoIds: extras.photoIds,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

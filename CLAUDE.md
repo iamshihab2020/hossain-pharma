@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository directory is still `hossain-pharma` and the git history begins as a pharmacy project. That is historical. **Pharmacy is not a vertical here** and prescription medicine is explicitly out of scope — do not reintroduce health framing into naming, seed data, or copy. Names inside `archive/` are left alone on purpose.
 
-Work is organised into 13 phases. **Phases 0-6 are complete, Phase 7 is in progress (reviews and moderation are in; photos, helpful voting, Q&A and auto-flagging are not); Phases 8-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
+Work is organised into 13 phases. **Phases 0-7 are complete; Phases 8-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
 
 ## Commands
 
@@ -95,8 +95,8 @@ express that (ADR 0016). `search_documents`,
 already-public products, the other two are scoped by `user_id` in the service, which is
 then the ONLY boundary and is tested as one.
 
-Phase 7's trust tables - `reviews`, `product_ratings` and `seller_ratings` - are
-**platform-owned with no RLS** for the third application of the same argument: PRD 9.5
+Phase 7's trust tables - `reviews`, `review_media`, `review_votes`, `questions`,
+`answers`, `product_ratings` and `seller_ratings` - are **platform-owned with no RLS** for the third application of the same argument: PRD 9.5
 puts the rating and its histogram on the PRODUCT PAGE, whose reader has no session and
 no tenant. The service is then the whole boundary, and it is a DIFFERENT boundary per
 verb - public reads, `ctx.userId` writes, platform-admin moderation - so none of them
@@ -317,6 +317,27 @@ recreating the database.
   It arrives as a LEFT JOIN on `seller_ratings`, averaged by the SHARED function rather
   than in SQL, and NULL still means "unrated" - which sorts behind a rated seller rather
   than below a one-star.
+- **Denormalise where the READ cannot afford the join, not everywhere the number
+  appears.** A rating gets `product_ratings` because the buy box ranks on it in a query
+  over the whole catalogue; a helpful count gets no column at all, because the only page
+  that shows it has already fetched the twenty reviews it belongs to. `review_votes` is
+  keyed on (review, user), so voting is idempotent by construction and un-voting is a
+  DELETE - there is no counter to drift.
+- **Asking a question needs NO purchase, which is why Q&A is its own table and its own
+  service.** A review is a verdict on something you received; a question is what you ask
+  before buying, and gating it on an order would leave it askable only by the people who
+  no longer need to ask. `answers.seller_org_id` is nullable and verified against
+  `org_members` at write time - on a marketplace "the seller replied" is ambiguous until
+  you say WHICH, and a header that promoted an answer without a membership check would
+  make the badge worth nothing.
+- **Auto-flagging flags; it can never hide or refuse.** A twenty-word list is wrong often
+  enough that letting it block would be a censorship bug with a scheduler. The review is
+  written, visible and counted, with its reasons in `flag_reasons` - an ARRAY, because the
+  rules are independent and the combination is the signal. RESTORE clears the array as
+  well as the status, or a cleared review looks like one nobody has reached yet.
+- **A review photo's serve route is where moderation binds.** `GET /reviews/media/:id`
+  refuses a photo whose review is REMOVED. Nothing lists photo ids, so this is the one
+  surface a takedown could miss silently.
 - **A Server Action refreshes the route it was called from**, so client state set after
   one can paint into a component that has already unmounted. The review form's "thank
   you" was unreachable for exactly this reason and the E2E journey is what noticed; it

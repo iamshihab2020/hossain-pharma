@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 import type { RatingSummary, Review } from '@nexmarket/api-client';
 import { RatingStars } from '@/components/rating-stars';
+import { ReviewActions } from '@/components/review-actions';
 import { formatDate } from '@/lib/format';
+import { reviewPhotoUrl } from '@/lib/media';
 import { isUnderReview, reviewCountLabel, reviewHeading, scaledBars } from '@/lib/reviews';
 
 /**
@@ -19,9 +21,12 @@ import { isUnderReview, reviewCountLabel, reviewHeading, scaledBars } from '@/li
 export function ReviewPanel({
   summary,
   reviews,
+  productSlug,
 }: {
   summary: RatingSummary;
   reviews: readonly Review[];
+  /** For the report action, which revalidates the page it was pressed on. */
+  productSlug: string;
 }): ReactNode {
   return (
     <section className="mt-12 border-t pt-8" aria-labelledby="reviews-heading">
@@ -46,7 +51,7 @@ export function ReviewPanel({
           <ul className="mt-8 flex flex-col gap-6">
             {reviews.map((review) => (
               <li key={review.id}>
-                <ReviewCard review={review} />
+                <ReviewCard review={review} productSlug={productSlug} />
               </li>
             ))}
           </ul>
@@ -100,7 +105,13 @@ function Histogram({ summary }: { summary: RatingSummary }): ReactNode {
   );
 }
 
-function ReviewCard({ review }: { review: Review }): ReactNode {
+function ReviewCard({
+  review,
+  productSlug,
+}: {
+  review: Review;
+  productSlug: string;
+}): ReactNode {
   return (
     <article className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -129,6 +140,31 @@ function ReviewCard({ review }: { review: Review }): ReactNode {
       {review.body.trim() !== '' && (
         <p className="max-w-prose whitespace-pre-line text-sm">{review.body}</p>
       )}
+
+      {review.photoIds.length > 0 && (
+        <ul className="mt-1 flex flex-wrap gap-2">
+          {review.photoIds.map((id) => (
+            <li key={id}>
+              {/* A plain <img>, not next/image: the API
+                  streams these from an opaque storage key, so there is no
+                  remote pattern for next/image to whitelist and no intrinsic
+                  size known ahead of time. */}
+              <img
+                src={reviewPhotoUrl(id)}
+                alt={`Photo from ${review.authorName}'s review`}
+                loading="lazy"
+                className="size-20 rounded-md border border-border object-cover"
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <ReviewActions
+        reviewId={review.id}
+        helpfulCount={review.helpfulCount}
+        productSlug={productSlug}
+      />
 
       {isUnderReview(review) && (
         <p className="text-xs text-warn">

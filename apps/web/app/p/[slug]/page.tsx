@@ -2,11 +2,18 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { ApiError } from '@/lib/api/server';
-import { getProduct, getProductRating, getProductReviews, getSimilar } from '@/lib/api/queries';
+import { ApiError, isSignedIn } from '@/lib/api/server';
+import {
+  getProduct,
+  getProductQuestions,
+  getProductRating,
+  getProductReviews,
+  getSimilar,
+} from '@/lib/api/queries';
 import { DeliveryCheck } from '@/components/delivery-check';
 import { OfferTable } from '@/components/offer-table';
 import { ProductCard } from '@/components/product-card';
+import { QaPanel } from '@/components/qa-panel';
 import { ReviewPanel } from '@/components/review-panel';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -72,7 +79,7 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
    * having a bad minute must not take a product page down with it, which is the
    * same call the delivery check and the return-pickup panel already make.
    */
-  const [similar, rating, reviews] = await Promise.all([
+  const [similar, rating, reviews, questions, signedIn] = await Promise.all([
     getSimilar(slug).catch(() => []),
     getProductRating(product.id).catch(() => ({
       average: null,
@@ -80,6 +87,8 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
       distribution: [],
     })),
     getProductReviews(product.id).catch(() => []),
+    getProductQuestions(product.id).catch(() => []),
+    isSignedIn(),
   ]);
   const [primary] = product.variants;
 
@@ -204,7 +213,12 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
           exists to answer is which seller to buy from, and the comparison table
           answers it; reviews are the evidence somebody consults after the
           shortlist, not before it. */}
-      <ReviewPanel summary={rating} reviews={reviews} />
+      <ReviewPanel summary={rating} reviews={reviews} productSlug={slug} />
+
+      {/* Q&A AFTER the reviews, which is the order a shopper reads them in:
+          "what did people think" is the question everybody has, and "does it
+          fit my socket" is the one a few people have. */}
+      <QaPanel productId={product.id} initial={questions} signedIn={signedIn} />
 
       {similar.length > 0 && (
         <>
