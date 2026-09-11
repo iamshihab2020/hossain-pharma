@@ -3,10 +3,11 @@ import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { ApiError } from '@/lib/api/server';
-import { getProduct, getSimilar } from '@/lib/api/queries';
+import { getProduct, getProductRating, getProductReviews, getSimilar } from '@/lib/api/queries';
 import { DeliveryCheck } from '@/components/delivery-check';
 import { OfferTable } from '@/components/offer-table';
 import { ProductCard } from '@/components/product-card';
+import { ReviewPanel } from '@/components/review-panel';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -62,7 +63,24 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
     throw error;
   }
 
-  const similar = await getSimilar(slug).catch(() => []);
+  /**
+   * In PARALLEL, because none of the three needs the others.
+   *
+   * Sequential awaits here would add a round trip each to a page whose whole
+   * argument for being server-rendered is that the comparison arrives in the
+   * first response. Each falls back rather than throwing: a rating service
+   * having a bad minute must not take a product page down with it, which is the
+   * same call the delivery check and the return-pickup panel already make.
+   */
+  const [similar, rating, reviews] = await Promise.all([
+    getSimilar(slug).catch(() => []),
+    getProductRating(product.id).catch(() => ({
+      average: null,
+      total: 0,
+      distribution: [],
+    })),
+    getProductReviews(product.id).catch(() => []),
+  ]);
   const [primary] = product.variants;
 
   return (
@@ -181,6 +199,12 @@ export default async function ProductDetailPage({ params }: Params): Promise<Rea
           </section>
         </>
       )}
+
+      {/* BELOW the offers and below the specifications. The question this page
+          exists to answer is which seller to buy from, and the comparison table
+          answers it; reviews are the evidence somebody consults after the
+          shortlist, not before it. */}
+      <ReviewPanel summary={rating} reviews={reviews} />
 
       {similar.length > 0 && (
         <>

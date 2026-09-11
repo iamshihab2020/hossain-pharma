@@ -7,3 +7,4 @@ export * from './order-state.js';
 export * from './fulfilment.js';
 export * from './logistics.js';
 export * from './allocation.js';
+export * from './reviews.js';

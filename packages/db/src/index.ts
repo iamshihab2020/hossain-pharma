@@ -9,4 +9,12 @@ export {
   deleteAllSearchDocuments,
   insertAllSearchDocuments,
 } from './search-index.js';
+export {
+  recomputeProductRating,
+  recomputeSellerRating,
+  clearAllRatings,
+  insertAllProductRatings,
+  insertAllSellerRatings,
+  ratingDrift,
+} from './review-aggregates.js';
 export * as schema from './schema/index.js';

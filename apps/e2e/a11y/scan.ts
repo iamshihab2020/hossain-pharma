@@ -26,9 +26,8 @@ export async function expectNoSeriousA11yViolations(page: Page, label: string): 
   const advisory = results.violations.filter((violation) => !blocking.includes(violation));
 
   if (advisory.length > 0) {
-    // eslint-disable-next-line no-console -- the advisory half is a REPORT, and
-    // a report nobody can read is not one. Playwright's list reporter prints it
-    // beside the test it belongs to.
+    // The advisory half is a REPORT, and a report nobody can read is not one.
+    // Playwright's list reporter prints this beside the test it belongs to.
     console.log(
       `[a11y:${label}] ${String(advisory.length)} advisory finding(s): ` +
         advisory.map((v) => `${v.id} (${String(v.impact)})`).join(', '),

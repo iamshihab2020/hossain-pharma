@@ -42,7 +42,19 @@ export default async function OrdersPage({
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Your orders</h1>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Your orders</h1>
+        {/* The way in to Phase 7, from the only place that has the proof of
+            purchase a review hangs off. A "write a review" link in the site
+            header would have nothing to point at for the many people who have
+            bought nothing. */}
+        <Link
+          href="/reviews"
+          className="text-sm text-primary underline-offset-4 hover:underline"
+        >
+          Reviews to write
+        </Link>
+      </div>
 
       {placed !== undefined && (
         <Alert className="mt-6 border-primary/40 bg-wash">

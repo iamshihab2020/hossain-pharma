@@ -29,6 +29,7 @@ invariants in one place — see [`../SYSTEM-DESIGN.md`](../SYSTEM-DESIGN.md).
 | [0019](./0019-buyer-cancellation-and-the-fourth-escape.md) | Buyer cancellation, and the fourth tenant-scope escape | 5 |
 | [0020](./0020-dispatch-release-and-per-unit-allocation.md) | **Dispatch releases the payable, and the allocation that makes it exact** | 5 |
 | [0021](./0021-geography-is-platform-owned.md) | **Geography is platform-owned, and the shipping port stays pure** | 6 |
+| [0022](./0022-reviews-hang-off-purchases.md) | **Reviews hang off purchases, and the histogram is the only stored rating** | 7 |
 
 **Read 0003 first.** It covers the three separate ways tenant isolation can be
 reduced to decoration, each of which fails silently, and where each is checked.

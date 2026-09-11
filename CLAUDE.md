@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository directory is still `hossain-pharma` and the git history begins as a pharmacy project. That is historical. **Pharmacy is not a vertical here** and prescription medicine is explicitly out of scope — do not reintroduce health framing into naming, seed data, or copy. Names inside `archive/` are left alone on purpose.
 
-Work is organised into 13 phases. **Phases 0-6 are complete; Phases 7-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
+Work is organised into 13 phases. **Phases 0-6 are complete, Phase 7 is in progress (reviews and moderation are in; photos, helpful voting, Q&A and auto-flagging are not); Phases 8-12 have not started.** `docs/PRD-marketplace-migration.md` is the spec, `docs/SYSTEM-DESIGN.md` is the system as built (15 diagrams: the request pipeline, tenancy, the ERD, the lifecycles, the buy box, search), and `docs/architecture/` holds the decision records. `docs/DESIGN-DIRECTION.md` is the front-end design direction - proposed, except for the parts Phase 5 built against it. Read it before adding anything to `apps/web`. Read `docs/architecture/0003-rls-app-role-and-pooling.md` before touching anything database-related, and `0009` before touching guards, the interceptor or anything that resolves a tenant.
 
 ## Commands
 
@@ -94,6 +94,13 @@ express that (ADR 0016). `search_documents`,
 `recently_viewed` and `saved_searches` are platform-owned too - the first describes
 already-public products, the other two are scoped by `user_id` in the service, which is
 then the ONLY boundary and is tested as one.
+
+Phase 7's trust tables - `reviews`, `product_ratings` and `seller_ratings` - are
+**platform-owned with no RLS** for the third application of the same argument: PRD 9.5
+puts the rating and its histogram on the PRODUCT PAGE, whose reader has no session and
+no tenant. The service is then the whole boundary, and it is a DIFFERENT boundary per
+verb - public reads, `ctx.userId` writes, platform-admin moderation - so none of them
+shares a helper. ADR 0022.
 
 Phase 6's four geography tables - `delivery_zones`, `serviceability`, `zone_rates` and
 `delivery_slots` - are **platform-owned with no RLS**, the same call the catalogue got and
@@ -279,6 +286,43 @@ recreating the database.
   is what it did until the S3 journey pressed it - meant a cash order could be placed and
   then never accepted, never shipped, and so never collected, with every API test green.
 
+### Trust (Phase 7)
+
+- **A review hangs off an ORDER LINE, not off a product with a `verified` flag.** That is
+  what makes "only delivered purchases can review" three mechanisms rather than one
+  forgettable check: the order is yours (a predicate), it is DELIVERED (a predicate read
+  at write time, not trusted from the page), and once (`reviews_order_item_key`, a unique
+  constraint rather than a prior SELECT). **The product is DERIVED from the line**, never
+  taken from the body - a caller naming both could review one thing on the strength of
+  having bought another, which is exactly what the badge would then be worth.
+- **The histogram is the stored rating and nothing derived is stored beside it.** Five
+  integers give the count, the average and every bar; an average column would be a second
+  source of truth for one fact, and ADR 0010 exists because this has bitten twice.
+  `ReviewAggregateService` is the only writer, it takes the CALLER's transaction so the
+  aggregate commits with the review, and it recomputes from source rather than
+  incrementing - an edit is a decrement and an increment that must both land.
+  `ratingDrift` in `packages/db` is the comparison, and it lives beside the statements it
+  checks because a comparison written inside a test agrees with the bug.
+- **FLAGGED is still visible; only REMOVED disappears.** A report is an accusation, not a
+  verdict, and on a marketplace the first complainer is usually the seller the review is
+  about. REMOVED is gone from FIVE surfaces - the list, the histogram, the seller score,
+  the buy box and the search index - and the one that gets missed is the histogram,
+  because every read filters the status on its own and only the aggregate refresh fixes
+  the rest.
+- **Moderation is a status; the author's own delete is a DELETE.** Two verbs, two
+  mechanisms: a person withdrawing their own words leaves nothing behind, a moderator
+  taking somebody else's down has to stay auditable and reversible.
+- **`sellerRating` in the buy box is no longer null.** PRD 8.3 wrote that ranking key in
+  during Phase 2 and `catalogue.service.ts` passed `null` for every seller until Phase 7.
+  It arrives as a LEFT JOIN on `seller_ratings`, averaged by the SHARED function rather
+  than in SQL, and NULL still means "unrated" - which sorts behind a rated seller rather
+  than below a one-star.
+- **A Server Action refreshes the route it was called from**, so client state set after
+  one can paint into a component that has already unmounted. The review form's "thank
+  you" was unreachable for exactly this reason and the E2E journey is what noticed; it
+  redirects to `/reviews?posted=1` instead, the same way checkout carries its
+  confirmation in `/orders?placed=`.
+
 ### Money
 
 `type Money = { amount: number; currency: string }` where `amount` is **integer minor
@@ -347,7 +391,8 @@ projects on this machine bind 5432/6379. Container-internal ports are standard.
   in `apps/web/lib/order-timeline.test.ts`.
 - Test coverage thresholds are enforced at 100% on `money.ts`, `capabilities.ts`,
   `buy-box.ts`, `ledger.ts`, `pricing.ts`, `order-state.ts`, `fulfilment.ts`,
-  `logistics.ts`, `allocation.ts`, `tenant-context.ts` and `assert-driver.ts`. If one
+  `logistics.ts`, `allocation.ts`, `reviews.ts`, `tenant-context.ts` and
+  `assert-driver.ts`. If one
   fails, add the missing test rather than lowering the threshold. Twice now the honest
   fix has been to DELETE an unreachable branch rather than test it - a `?? 0` on a map
   key that cannot be missing is a safety net over solid ground.

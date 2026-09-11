@@ -735,6 +735,73 @@ export const authResponseSchema = z.object({
 });
 export type AuthResponse = z.infer<typeof authResponseSchema>;
 
+// ---- reviews (Phase 7) ------------------------------------------------------
+
+export const reviewStatusSchema = z.enum(['PUBLISHED', 'FLAGGED', 'REMOVED']);
+export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
+
+/**
+ * One review as a page renders it.
+ *
+ * `authorName` and `sellerName`, never ids: a review is read by strangers, and
+ * the two things they need to judge it are who wrote it and who sold it. No
+ * `authorUserId` - a public list that carries a user id hands out a way to
+ * correlate one person's purchases across the whole catalogue, and the page has
+ * no use for it.
+ */
+export const reviewSchema = z.object({
+  id: z.string(),
+  productId: z.string(),
+  rating: z.number().int().min(1).max(5),
+  title: z.string(),
+  body: z.string(),
+  authorName: z.string(),
+  sellerName: z.string(),
+  status: reviewStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Review = z.infer<typeof reviewSchema>;
+export const reviewsResponse = z.object({ items: z.array(reviewSchema) });
+
+/**
+ * The rating summary: an average, a total, and the five bars.
+ *
+ * `average` is NULLABLE and that is load-bearing all the way to the UI - an
+ * unrated product shows "No reviews yet", not "0.0 stars", and the two are
+ * different claims about a seller nobody has bought from yet.
+ */
+export const ratingSummarySchema = z.object({
+  average: z.number().nullable(),
+  total: z.number().int(),
+  distribution: z.array(
+    z.object({
+      stars: z.number().int().min(1).max(5),
+      count: z.number().int(),
+      share: z.number().int(),
+    }),
+  ),
+});
+export type RatingSummary = z.infer<typeof ratingSummarySchema>;
+
+/** A delivered line the signed-in buyer has not reviewed yet. */
+export const reviewablePurchaseSchema = z.object({
+  orderItemId: z.string(),
+  orderNumber: z.string(),
+  productId: z.string(),
+  productName: z.string(),
+  variantSku: z.string(),
+  sellerName: z.string(),
+  deliveredAt: z.string(),
+});
+export type ReviewablePurchase = z.infer<typeof reviewablePurchaseSchema>;
+export const reviewablePurchasesResponse = z.object({
+  items: z.array(reviewablePurchaseSchema),
+});
+
+export const reportOutcomeSchema = z.object({ flagged: z.boolean() });
+export type ReportOutcome = z.infer<typeof reportOutcomeSchema>;
+
 // ---- error bodies -----------------------------------------------------------
 
 /**

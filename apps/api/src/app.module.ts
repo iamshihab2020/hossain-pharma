@@ -20,6 +20,7 @@ import { PaymentsModule } from './modules/payments/payments.module.js';
 import { ShippingModule } from './modules/shipping/shipping.module.js';
 import { WarehousesModule } from './modules/warehouses/warehouses.module.js';
 import { OrgsModule } from './modules/orgs/orgs.module.js';
+import { ReviewsModule } from './modules/reviews/reviews.module.js';
 import { SearchModule } from './modules/search/search.module.js';
 
 /**
@@ -58,6 +59,7 @@ import { SearchModule } from './modules/search/search.module.js';
     ListingsModule,
     OrdersModule,
     OrgsModule,
+    ReviewsModule,
     SearchModule,
   ],
   providers: [

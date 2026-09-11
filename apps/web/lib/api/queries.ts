@@ -10,6 +10,8 @@ import {
   type OrderView,
   type ProductPage,
   type ProductSummary,
+  type RatingSummary,
+  type Review,
   type DeliverySlot,
   type Quote,
   type ReturnPickup,
@@ -87,6 +89,37 @@ export function search(query: SearchQuery): Promise<SearchResult> {
  */
 export function getMostCompeted(): Promise<SearchResult> {
   return search({ sort: 'sellers', limit: 8, inStock: true });
+}
+
+/**
+ * The rating and the reviews under a product. PRD 9.5.
+ *
+ * Cached like the rest of the catalogue and tagged with it, so a new review
+ * revalidates the product page rather than waiting a minute - `writeReview`
+ * calls `revalidateTag('catalogue')` for exactly that. Public, with no auth:
+ * these are the tables Phase 7 made platform-owned so an anonymous shopper can
+ * read them, and sending a token would not change a row.
+ *
+ * TWO CALLS RATHER THAN ONE. The summary is five integers and is what the page
+ * shows above the fold; the list is twenty rows of prose. Folding them into one
+ * response would make the cheap half wait for the expensive one on every render
+ * of a page that mostly wants the average.
+ */
+export function getProductRating(productId: string): Promise<RatingSummary> {
+  return apiGet(endpoints.productRating(productId), {
+    auth: false,
+    revalidate: CATALOGUE_TTL,
+    tags: ['catalogue', `rating:${productId}`],
+  });
+}
+
+export async function getProductReviews(productId: string): Promise<Review[]> {
+  const { items } = await apiGet(endpoints.productReviews(productId), {
+    auth: false,
+    revalidate: CATALOGUE_TTL,
+    tags: ['catalogue', `rating:${productId}`],
+  });
+  return items;
 }
 
 // ---- the cart ---------------------------------------------------------------

@@ -14,4 +14,5 @@ export * from './payments.js';
 export * from './orders.js';
 export * from './fulfilment.js';
 export * from './ledger.js';
+export * from './reviews.js';
 export * from './rls-probe.js';

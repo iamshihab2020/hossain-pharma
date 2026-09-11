@@ -13,6 +13,11 @@ import {
   shipmentViewSchema,
   productPageSchema,
   serviceabilitySchema,
+  ratingSummarySchema,
+  reviewSchema,
+  reviewsResponse,
+  reviewablePurchasesResponse,
+  reportOutcomeSchema,
   deliverySlotsResponse,
   warehousesResponse,
   warehouseSchema,
@@ -128,6 +133,30 @@ export const endpoints = {
   /** Under two characters the API answers an empty list rather than scanning. */
   suggest: (term: string) =>
     endpoint(`/search/suggest?q=${encodeURIComponent(term)}`, suggestResponse),
+
+  /**
+   * Reviews and their summary, keyed by product ID rather than slug.
+   *
+   * The odd one out among the public catalogue routes, and deliberately: the
+   * page already holds the product it is rendering, and resolving a slug a
+   * second time to reach its own reviews would be a join for nothing. Both are
+   * PUBLIC for the reason the product page itself is - a review behind a login
+   * is a review nobody reads before deciding to buy.
+   */
+  productReviews: (productId: string) =>
+    endpoint(`/products/${encodeURIComponent(productId)}/reviews`, reviewsResponse),
+  productRating: (productId: string) =>
+    endpoint(`/products/${encodeURIComponent(productId)}/reviews/summary`, ratingSummarySchema),
+
+  /** Flags a review for a human. Public, and it cannot destroy anything. */
+  reportReview: (id: string) =>
+    endpoint(`/reviews/${encodeURIComponent(id)}/report`, reportOutcomeSchema),
+
+  // ---- the buyer's own reviews ----------------------------------------------
+  myReviews: () => endpoint('/me/reviews', reviewSchema),
+  myReview: (id: string) => endpoint(`/me/reviews/${encodeURIComponent(id)}`, reviewSchema),
+  reviewablePurchases: () =>
+    endpoint('/me/reviews/pending', reviewablePurchasesResponse),
 
   /**
    * Serviceability by postcode, for the product page's delivery check.

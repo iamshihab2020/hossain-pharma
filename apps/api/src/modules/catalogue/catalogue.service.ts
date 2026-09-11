@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { schema, withTenant, type Transaction } from '@nexmarket/db';
 import {
+  averageRating,
   chargeableWeightGrams,
   rankOffers,
   type BuyBox,
@@ -324,9 +325,24 @@ export class CatalogueService {
         sellerStatus: schema.organisations.status,
         sellerSlug: schema.organisations.slug,
         sellerName: schema.organisations.displayName,
+        ...RATING_COLUMNS,
       })
       .from(schema.listings)
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.listings.tenantId))
+      /**
+       * LEFT JOIN, and left because an unrated seller must still have an offer.
+       *
+       * A join rather than a correlated subquery in the SELECT list: Drizzle
+       * renders column references there without table qualification, so
+       * `WHERE a.tenant_id = b.id` becomes `WHERE "tenant_id" = "id"` - a table
+       * compared to itself, always false, no error (ADR 0010).
+       *
+       * `seller_ratings` is platform-owned with no RLS, which is what lets this
+       * join work on the anonymous product page. A tenant-owned rating table
+       * would contribute nothing here and the buy box would rank as though
+       * nobody had ever been reviewed.
+       */
+      .leftJoin(schema.sellerRatings, eq(schema.sellerRatings.tenantId, schema.listings.tenantId))
       .where(
         inArray(
           schema.listings.variantId,
@@ -361,10 +377,12 @@ export class CatalogueService {
         availableStock: schema.listings.availableStock,
         listingStatus: schema.listings.status,
         sellerStatus: schema.organisations.status,
+        ...RATING_COLUMNS,
       })
       .from(schema.listings)
       .innerJoin(schema.productVariants, eq(schema.productVariants.id, schema.listings.variantId))
       .innerJoin(schema.organisations, eq(schema.organisations.id, schema.listings.tenantId))
+      .leftJoin(schema.sellerRatings, eq(schema.sellerRatings.tenantId, schema.listings.tenantId))
       .where(inArray(schema.productVariants.productId, productIds));
 
     const byProduct = new Map<string, OfferInput[]>();
@@ -410,6 +428,22 @@ function toPublicBuyBox(box: BuyBox, sellers: SellerMap): PublicBuyBox {
   };
 }
 
+/**
+ * The seller's rating histogram, selected by both offer queries.
+ *
+ * Named once so the two cannot drift apart, and selected as the five COUNTS
+ * rather than an average computed in SQL: `averageRating` in @nexmarket/shared
+ * is the single definition of what a rating means, and a second one written in
+ * Postgres would be a second definition that agrees until it does not.
+ */
+const RATING_COLUMNS = {
+  ratingCount1: schema.sellerRatings.count1,
+  ratingCount2: schema.sellerRatings.count2,
+  ratingCount3: schema.sellerRatings.count3,
+  ratingCount4: schema.sellerRatings.count4,
+  ratingCount5: schema.sellerRatings.count5,
+} as const;
+
 type OfferRow = {
   listingId: string;
   tenantId: string;
@@ -421,6 +455,11 @@ type OfferRow = {
   availableStock: number;
   listingStatus: string;
   sellerStatus: string;
+  ratingCount1: number | null;
+  ratingCount2: number | null;
+  ratingCount3: number | null;
+  ratingCount4: number | null;
+  ratingCount5: number | null;
 };
 
 function toOffer(row: OfferRow): OfferInput {
@@ -437,9 +476,23 @@ function toOffer(row: OfferRow): OfferInput {
     shipping: { amount: row.shippingAmount, currency: row.priceCurrency },
     dispatchDays: row.dispatchDays,
     availableStock: row.availableStock,
-    // PRD 8.3's second ranking key. There are no reviews until Phase 7, so it
-    // is null for every seller and never breaks a tie today.
-    sellerRating: null,
+    /**
+     * PRD 8.3's second ranking key, filled in at last.
+     *
+     * Phase 2 wrote this key into the buy box and handed it `null` for every
+     * seller, because there was nothing to put in it; Phase 7 is the phase that
+     * has something. NULL still happens and still means what it meant - an
+     * unrated seller sorts BEHIND a rated one rather than below a one-star -
+     * which is why `averageRating` returns null for an empty histogram rather
+     * than zero, and why this is a LEFT JOIN.
+     */
+    sellerRating: averageRating([
+      row.ratingCount1 ?? 0,
+      row.ratingCount2 ?? 0,
+      row.ratingCount3 ?? 0,
+      row.ratingCount4 ?? 0,
+      row.ratingCount5 ?? 0,
+    ]),
     listingStatus: row.listingStatus,
     sellerStatus: row.sellerStatus,
   };

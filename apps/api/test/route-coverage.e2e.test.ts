@@ -57,9 +57,18 @@ const registered: { method: string; url: string }[] = [];
  *   delivery window is choosing courier capacity in a REGION, which belongs to
  *   no seller and names no person. It exposes REMAINING capacity rather than
  *   `booked`, so it leaks nothing about how many other people ordered.
+ * `/products/:productId/reviews`, `/products/:productId/reviews/summary` -
+ *   Phase 7. PRD 9.5 puts the rating, its histogram and the reviews themselves
+ *   on the product page, which is the same anonymous reader as the catalogue
+ *   above. A review behind a login is a review nobody reads before deciding to
+ *   buy, which is the one moment it exists for. `reviews`, `product_ratings`
+ *   and `seller_ratings` are platform-owned with no RLS for exactly this
+ *   reader; both routes already filter REMOVED, so moderation binds here too.
  */
 const PUBLIC_READS: ReadonlySet<string> = new Set([
   'GET /health',
+  'GET /products/:productId/reviews',
+  'GET /products/:productId/reviews/summary',
   'GET /cart',
   'GET /auth/google',
   'GET /auth/google/callback',
@@ -86,6 +95,18 @@ const PUBLIC_READS: ReadonlySet<string> = new Set([
  * no justification, so adding one is a decision somebody wrote down.
  */
 const PUBLIC_WRITES: ReadonlyMap<string, string> = new Map([
+  [
+    'POST /reviews/:id/report',
+    'Requiring an account to report abuse means the abuse stays up while the ' +
+      'person who noticed it registers, and the people best placed to spot a ' +
+      'fake review are shoppers reading the page rather than the one buyer who ' +
+      'wrote it. What makes it safe to leave open is that it cannot DESTROY ' +
+      'anything: it flags, it does not hide, and it moves only a PUBLISHED ' +
+      'review - so no volume of reports can undo a moderator, and the worst a ' +
+      'brigade achieves is putting a review in front of a human. The only ' +
+      'caller-supplied value reaching a query is an id, which selects one row, ' +
+      'and the response says nothing a caller did not already know.',
+  ],
   [
     'POST /webhooks/shipping/:provider',
     'A courier holds no NexMarket session; the HMAC over the raw body is the ' +

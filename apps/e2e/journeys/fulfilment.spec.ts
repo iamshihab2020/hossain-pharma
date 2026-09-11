@@ -143,4 +143,74 @@ test('a seller ships part of an order and the buyer watches it move', async ({
   await expect(page.getByText(/Dispatched with Pathao/i)).toBeVisible();
   await expect(page.getByText('PT-E2E-1', { exact: true })).toBeVisible();
   await expect(page.getByText('Tracking PT-E2E-1')).toBeVisible();
+
+  // --- and the buyer reviews what arrived ----------------------------------
+  //
+  // PRD S2's `review` step, which this spec listed as "Phase 7, absent on
+  // purpose rather than forgotten" until Phase 7 landed. It belongs HERE rather
+  // than in a spec of its own for the reason the whole step exists: only a
+  // DELIVERED purchase can be reviewed, and this is the only journey that
+  // delivers one.
+  await page.goto('/reviews');
+  await expect(page.getByRole('heading', { name: /reviews to write/i })).toBeVisible();
+
+  /**
+   * EXACTLY ONE, out of three orders.
+   *
+   * The buyer placed three and only one was delivered, so this is the
+   * verified-purchase rule seen from the outside: the other two are paid for
+   * and still offer nothing to review. A page that listed all three would be
+   * offering lines the server then refuses.
+   */
+  // The star fieldset's own legend, not `locator('form')` - the site header
+  // carries a search form, so counting forms counted that too.
+  const pending = page.getByText(/^How was /);
+  await expect(pending).toHaveCount(1);
+  await expect(page.getByText(orderNumber)).toBeVisible();
+
+  await expectNoSeriousA11yViolations(page, 'reviews to write');
+
+  // THE LABEL, not the input. The radio is `sr-only` and its star sits on top
+  // of it, so a click aimed at the input is intercepted by the glyph - which is
+  // also what would happen to a person aiming at the input, if anyone could see
+  // it. Clicking the label is what a user actually does, and it is how the slot
+  // picker is driven in the logistics journey for the same reason.
+  await page.locator('label[for="star-4"]').click();
+  await page.getByLabel(/headline/i).fill('Arrived quickly');
+  await page.getByLabel(/other buyers/i).fill('Packed well and the tracking was accurate.');
+  await page.getByRole('button', { name: /post review/i }).click();
+
+  // The confirmation arrives via a REDIRECT, not via state in the form: a
+  // Server Action refreshes the route it was called from and unmounts the form
+  // with it, so a success flag set client-side never paints. Checkout carries
+  // its confirmation the same way, in `/orders?placed=`.
+  await expect(page).toHaveURL(/\/reviews\?posted=/);
+  await expect(page.getByText(/review posted/i)).toBeVisible();
+
+  // And it cannot be written twice - the line is gone from the list.
+  await expect(page.getByText(/^How was /)).toHaveCount(0);
+  await expect(page.getByText(/nothing waiting/i)).toBeVisible();
+
+  // --- a stranger sees it on the product page ------------------------------
+  //
+  // SIGNED OUT, which is the whole reason `reviews`, `product_ratings` and
+  // `seller_ratings` are platform-owned with no RLS: the reader a rating exists
+  // for carries no session and has chosen no seller.
+  await page.context().clearCookies();
+  await page.goto('/search?q=redmi');
+  await page.getByRole('link', { name: /redmi/i }).first().click();
+
+  const reviews = page.getByRole('region', { name: /what buyers said/i });
+  await expect(reviews.getByText('Arrived quickly')).toBeVisible();
+  // The headline figure and the count, both visible text. The screen-reader
+  // strings say "4.0 out of 5" for the average and "Rated 4 out of 5" for the
+  // one review, which is the distinction a listener needs and the reason they
+  // are worded apart.
+  await expect(reviews.getByText('4.0', { exact: true })).toBeVisible();
+  await expect(reviews.getByText('1 review')).toBeVisible();
+  // Who sold it, on a page where several sellers offer the same product - the
+  // fact that actually varies, unlike a verified badge every review carries.
+  await expect(reviews.getByText(new RegExp(`bought from ${SELLER_NAME}`, 'i'))).toBeVisible();
+
+  await expectNoSeriousA11yViolations(page, 'product page with reviews');
 });
